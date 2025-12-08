@@ -1,9 +1,9 @@
 //
 //  BookLibraryView.swift
-//  2 Music 2 Furious - MILESTONE 8.0
+//  2 Music 2 Furious - MILESTONE 8.8
 //
 //  Audiobook library
-//  Updates: Enhanced Detail View (Glass Header, Expandable Desc, Filter Bar)
+//  Updates: Default filter is Downloaded, Time shown for local files
 //
 
 import SwiftUI
@@ -120,117 +120,179 @@ struct BookLibraryView: View {
     }
 }
 
-// MARK: - Local Book Detail View (Refined)
+// MARK: - Local Book Detail View (The Smart View)
 
 struct LocalBookDetailView: View {
     let book: Book
     @ObservedObject var bookManager: BookManager
+    @ObservedObject var downloadManager = LibriVoxDownloadManager.shared
+    
     let onPlayChapter: (Int) -> Void
     
-    @State private var filter: FilterOption = .downloaded
+    @State private var filter: FilterOption = .downloaded // FIX: Default to downloaded
+    @State private var toastMessage = ""
+    @State private var showingToast = false
     
     enum FilterOption: String, CaseIterable {
         case all = "All"
         case downloaded = "Downloaded"
     }
     
-    // For local books, essentially all chapters present are "downloaded".
-    // This exists to match the LibriVox UI as requested.
-    var filteredChapters: [(Int, Track)] {
-        Array(book.chapters.enumerated())
+    var chaptersToDisplay: [DisplayChapter] {
+        if filter == .downloaded {
+            return book.chapters.enumerated().map { (index, track) in
+                // For downloaded tracks, calculate duration locally using BookManager
+                let duration = bookManager.getTrackDuration(track: track)
+                return DisplayChapter(index: index, title: track.title, isDownloaded: true, filename: track.filename, remoteChapter: nil, duration: duration)
+            }
+        } else {
+            if let remote = book.librivoxChapters, !remote.isEmpty {
+                return remote.enumerated().map { (index, remoteChap) in
+                    let targetIndex = index + 1
+                    let match = book.chapters.first { track in
+                        track.filename.contains("Chapter_\(String(format: "%03d", targetIndex))_")
+                    }
+                    return DisplayChapter(index: index, title: remoteChap.title, isDownloaded: match != nil, filename: match?.filename, remoteChapter: remoteChap, duration: remoteChap.formattedDuration)
+                }
+            } else {
+                return book.chapters.enumerated().map { (index, track) in
+                    let duration = bookManager.getTrackDuration(track: track)
+                    return DisplayChapter(index: index, title: track.title, isDownloaded: true, filename: track.filename, remoteChapter: nil, duration: duration)
+                }
+            }
+        }
+    }
+    
+    struct DisplayChapter: Identifiable {
+        var id: String { title + "\(index)" }
+        let index: Int
+        let title: String
+        let isDownloaded: Bool
+        let filename: String?
+        let remoteChapter: LibriVoxChapter?
+        let duration: String
     }
     
     var body: some View {
         ZStack {
             LinearGradient(colors: [Color.blue.opacity(0.1), Color.purple.opacity(0.1)], startPoint: .topLeading, endPoint: .bottomTrailing).ignoresSafeArea()
             
-            ScrollView {
-                VStack(spacing: 20) {
-                    // Header (Matching LibriVox Style)
-                    HStack(alignment: .top, spacing: 16) {
-                        ZStack {
-                            if let data = book.coverArtData, let uiImage = UIImage(data: data) {
-                                Image(uiImage: uiImage).resizable().aspectRatio(contentMode: .fill)
-                            } else if let url = book.coverArtUrl {
-                                AsyncImage(url: url) { phase in if let image = phase.image { image.resizable().aspectRatio(contentMode: .fill) } else { Color.purple.opacity(0.1); ProgressView() } }
-                            } else {
-                                Color.purple.opacity(0.1); Image(systemName: "book.fill").font(.system(size: 40)).foregroundColor(.purple)
+            List {
+                Section {
+                    VStack(spacing: 20) {
+                        HStack(alignment: .top, spacing: 16) {
+                            ZStack {
+                                if let data = book.coverArtData, let uiImage = UIImage(data: data) { Image(uiImage: uiImage).resizable().aspectRatio(contentMode: .fill) }
+                                else if let url = book.coverArtUrl { AsyncImage(url: url) { phase in if let image = phase.image { image.resizable().aspectRatio(contentMode: .fill) } else { Color.purple.opacity(0.1); ProgressView() } } }
+                                else { Color.purple.opacity(0.1); Image(systemName: "book.fill").font(.system(size: 40)).foregroundColor(.purple) }
+                            }.frame(width: 100, height: 100).cornerRadius(20).shadow(radius: 5)
+                            
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text(book.displayTitle).font(.title3.weight(.bold)).fixedSize(horizontal: false, vertical: true)
+                                Text(book.displayAuthor).font(.subheadline).foregroundColor(.secondary)
+                                Text("\(book.chapters.count) of \(book.librivoxChapters?.count ?? book.chapters.count) Downloaded").font(.caption).foregroundColor(.secondary)
                             }
+                            Spacer()
                         }
-                        .frame(width: 100, height: 100).cornerRadius(20).shadow(radius: 5)
+                        .padding().background(.ultraThinMaterial).cornerRadius(24)
                         
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text(book.displayTitle).font(.title3.weight(.bold)).fixedSize(horizontal: false, vertical: true)
-                            Text(book.displayAuthor).font(.subheadline).foregroundColor(.secondary)
-                            Text("\(book.chapters.count) Chapters").font(.caption).foregroundColor(.secondary)
+                        Button(action: { onPlayChapter(book.currentChapterIndex) }) {
+                            HStack { Image(systemName: "play.fill"); Text("Resume") }
+                                .font(.headline).foregroundColor(.white).padding(.vertical, 14).frame(maxWidth: .infinity).background(Color.blue).cornerRadius(16).shadow(color: Color.blue.opacity(0.3), radius: 5, x: 0, y: 5)
+                        }.buttonStyle(PlainButtonStyle())
+                        
+                        if let desc = book.description, !desc.isEmpty {
+                            LocalDescriptionView(text: desc.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression))
                         }
+                        
+                        Picker("Filter", selection: $filter) { ForEach(FilterOption.allCases, id: \.self) { option in Text(option.rawValue).tag(option) } }
+                            .pickerStyle(SegmentedPickerStyle())
                     }
-                    .padding().background(.ultraThinMaterial).cornerRadius(24).padding(.horizontal)
-                    
-                    // Resume/Play Button
-                    Button(action: { onPlayChapter(book.currentChapterIndex) }) {
-                        HStack { Image(systemName: "play.fill"); Text("Resume") }
-                            .font(.headline).foregroundColor(.white).padding(.vertical, 14).frame(maxWidth: .infinity).background(Color.blue).cornerRadius(16).shadow(color: Color.blue.opacity(0.3), radius: 5, x: 0, y: 5)
-                    }
-                    .padding(.horizontal)
-                    
-                    // Expandable Description (If exists)
-                    if let desc = book.description, !desc.isEmpty {
-                        LocalDescriptionView(text: desc.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression))
-                            .padding(.horizontal)
-                    }
-                    
-                    // Filter Bar (UI Consistency)
-                    Picker("Filter", selection: $filter) {
-                        ForEach(FilterOption.allCases, id: \.self) { option in Text(option.rawValue).tag(option) }
-                    }
-                    .pickerStyle(SegmentedPickerStyle())
-                    .padding(.horizontal)
-                    
-                    // Chapter List
-                    VStack(alignment: .leading, spacing: 8) {
-                        ForEach(filteredChapters, id: \.1.id) { index, chapter in
-                            Button { onPlayChapter(index) } label: {
-                                HStack(spacing: 12) {
-                                    Text("\(index + 1)").font(.caption.weight(.bold)).foregroundColor(.secondary).frame(width: 25)
-                                    Text(chapter.title).font(.system(size: 15, weight: .medium)).foregroundColor(.primary).lineLimit(1)
-                                    Spacer()
-                                    if index == book.currentChapterIndex { Image(systemName: "waveform").foregroundColor(.blue).font(.caption) }
-                                    else { Image(systemName: "play.fill").font(.caption).foregroundColor(.secondary.opacity(0.5)) }
-                                }
-                                .padding(12).background(.ultraThinMaterial).cornerRadius(12)
-                            }
-                            .buttonStyle(PlainButtonStyle())
-                            .contextMenu {
-                                Button(role: .destructive) { bookManager.deleteChapter(at: IndexSet(integer: index), from: book) } label: { Label("Delete Download", systemImage: "trash") }
-                            }
-                        }
-                    }
-                    .padding(.horizontal)
-                    
-                    Spacer(minLength: 50)
+                    .padding(.bottom, 10)
                 }
-                .padding(.top)
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
+                .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+                
+                Section {
+                    ForEach(chaptersToDisplay) { chapter in
+                        HStack(spacing: 12) {
+                            Text("\(chapter.index + 1)").font(.caption.weight(.bold)).foregroundColor(.secondary).frame(width: 25)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(chapter.title).font(.system(size: 15, weight: .medium)).foregroundColor(.primary).lineLimit(1)
+                                // FIX: Show duration for both local and remote
+                                Text(chapter.duration).font(.caption).foregroundColor(.secondary)
+                            }
+                            Spacer()
+                            
+                            if chapter.isDownloaded {
+                                Button {
+                                    if let filename = chapter.filename, let realIndex = book.chapters.firstIndex(where: { $0.filename == filename }) {
+                                        onPlayChapter(realIndex)
+                                    }
+                                } label: {
+                                    if let filename = chapter.filename, let realIndex = book.chapters.firstIndex(where: { $0.filename == filename }), realIndex == book.currentChapterIndex {
+                                        Image(systemName: "waveform").foregroundColor(.blue).font(.caption)
+                                    } else {
+                                        Image(systemName: "play.fill").font(.caption).foregroundColor(.secondary.opacity(0.5))
+                                    }
+                                }
+                                .buttonStyle(BorderlessButtonStyle())
+                            } else {
+                                if let remote = chapter.remoteChapter {
+                                    if downloadManager.isDownloading(bookId: book.librivoxChapters?.first?.id ?? "", chapterId: remote.id) {
+                                        ProgressView().scaleEffect(0.8)
+                                    } else {
+                                        Button {
+                                            // Pass Book ID (usually derived from first chapter section or API book ID if we had it, but here we can rely on title if ID not saved, but best to use book ID if possible. Since we only save chapters, we might need to rely on title as ID or similar).
+                                            // Actually, we need a stable book ID. For existing books, use the one from metadata if saved.
+                                            // Since Book struct doesn't save LibriVox Book ID specifically (only UUID), we use the one from the remote chapter's parent logic.
+                                            // Wait, downloadSingleChapter needs a bookId to track progress. We should use book.title or UUID if we don't have LibriVox ID saved.
+                                            // To fix the ghost issue properly, we need a stable ID. Let's use book.title as the "Book ID" for tracking since that's unique enough for our local DB.
+                                            downloadManager.downloadSingleChapter(chapter: remote, bookId: book.title, bookTitle: book.title, author: book.displayAuthor, coverUrl: book.coverArtUrl, description: book.description, index: chapter.index, bookManager: bookManager, fullChapterList: book.librivoxChapters)
+                                            showToast("Downloading...")
+                                        } label: { Image(systemName: "arrow.down.circle").foregroundColor(.blue).font(.system(size: 20)) }
+                                            .buttonStyle(BorderlessButtonStyle())
+                                    }
+                                }
+                            }
+                        }
+                        .padding(12).background(.ultraThinMaterial).cornerRadius(12)
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                        .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+                        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                            if chapter.isDownloaded, let filename = chapter.filename {
+                                Button(role: .destructive) {
+                                    bookManager.deleteChapterFile(filename: filename, from: book)
+                                } label: { Label("Delete", systemImage: "trash") }
+                            }
+                        }
+                    }
+                }
             }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            
+            if showingToast { VStack { Spacer(); BookToastView(message: toastMessage).padding(.bottom, 20) }.transition(.move(edge: .bottom).combined(with: .opacity)).animation(.spring(), value: showingToast).zIndex(100) }
         }
         .navigationTitle("").navigationBarTitleDisplayMode(.inline)
     }
+    
+    private func showToast(_ message: String) { toastMessage = message; withAnimation { showingToast = true }; DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { withAnimation { showingToast = false } } }
 }
 
-// Reuse similar Description component for local file
 struct LocalDescriptionView: View {
-    let text: String
-    @State private var isExpanded = false
-    
+    let text: String; @State private var isExpanded = false
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Description").font(.headline)
             Text(text).font(.system(size: 15)).foregroundColor(.secondary).lineLimit(isExpanded ? nil : 4).animation(.spring(), value: isExpanded)
-            Button(action: { withAnimation { isExpanded.toggle() } }) {
-                Text(isExpanded ? "Show Less" : "Show More").font(.caption.weight(.bold)).foregroundColor(.blue)
-            }
+            Button(action: { withAnimation { isExpanded.toggle() } }) { Text(isExpanded ? "Show Less" : "Show More").font(.caption.weight(.bold)).foregroundColor(.blue) }
         }
-        .padding().background(.ultraThinMaterial).cornerRadius(16).onTapGesture { withAnimation { isExpanded.toggle() } }
+        .padding()
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.ultraThinMaterial).cornerRadius(16).onTapGesture { withAnimation { isExpanded.toggle() } }
     }
 }
 
@@ -242,12 +304,10 @@ struct GlassBookRow: View {
                 if let data = book.coverArtData, let uiImage = UIImage(data: data) { Image(uiImage: uiImage).resizable().aspectRatio(contentMode: .fill) }
                 else if let url = book.coverArtUrl { AsyncImage(url: url) { phase in if let image = phase.image { image.resizable().aspectRatio(contentMode: .fill) } else { Color.purple.opacity(0.1) } } }
                 else { RoundedRectangle(cornerRadius: 12).fill(Color.purple.opacity(0.1)); Image(systemName: "book.fill").font(.system(size: 24)).foregroundColor(.purple) }
-            }
-            .frame(width: 50, height: 50).cornerRadius(8).clipped()
-            
+            }.frame(width: 50, height: 50).cornerRadius(8).clipped()
             VStack(alignment: .leading, spacing: 2) {
                 Text(book.displayTitle).font(.system(size: 16, weight: .medium)).foregroundColor(.primary).lineLimit(1)
-                Text("\(book.chapters.count) chapters").font(.caption).foregroundColor(.secondary)
+                Text("\(book.chapters.count) of \(book.librivoxChapters?.count ?? book.chapters.count) chapters").font(.caption).foregroundColor(.secondary)
             }
             Spacer()
             Button(action: onPlay) { Image(systemName: "play.circle.fill").font(.system(size: 28)).foregroundColor(.blue.opacity(0.8)).shadow(radius: 2) }.buttonStyle(BorderlessButtonStyle())
