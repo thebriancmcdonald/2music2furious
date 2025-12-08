@@ -1,6 +1,6 @@
 //
 //  ContentView.swift
-//  2 Music 2 Furious - MILESTONE 9.3
+//  2 Music 2 Furious - MILESTONE 9.4
 //
 //  Main app view with dual audio players
 //  Layout: Label -> Title -> Seek -> Controls -> [Up Next Card] -> Action Buttons
@@ -373,8 +373,27 @@ struct TrackInfoView: View {
                     .font(.system(size: 13, weight: .medium, design: .rounded))
                     .foregroundColor(.white.opacity(0.7)).lineLimit(1)
             }
+            
             Spacer()
+            
+            // SPEED BUTTON
+            Button(action: { player.cycleSpeed() }) {
+                Text("\(String(format: "%.1f", player.playbackSpeed))x")
+                    .font(.system(size: 12, weight: .bold, design: .monospaced))
+                    .foregroundColor(player.playbackSpeed == 1.0 ? .white.opacity(0.5) : .green)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(
+                        Capsule()
+                            .fill(player.playbackSpeed == 1.0 ? Color.white.opacity(0.1) : Color.white.opacity(0.2))
+                    )
+                    .overlay(
+                        Capsule()
+                            .stroke(player.playbackSpeed == 1.0 ? Color.clear : Color.green.opacity(0.5), lineWidth: 1)
+                    )
+            }
         }
+        .padding(.horizontal, 4)
     }
 }
 

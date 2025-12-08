@@ -3,21 +3,29 @@
 //  2 Music 2 Furious - MILESTONE 4
 //
 //  Detects and manages audiobook chapters
+//  Updates: Added description and author support
 //
 
 import Foundation
 import Combine
+import SwiftUI
+import AVFoundation
 
 struct Book: Identifiable, Codable {
-    var id = UUID()  // var to satisfy Codable requirements
+    var id = UUID()
     let title: String
+    var author: String?         // <--- NEW
+    var description: String?    // <--- NEW
     var chapters: [Track]
     var currentChapterIndex: Int = 0
     var lastPlayedPosition: Double = 0
     let dateAdded: Date
     
+    // Artwork support
+    var coverArtUrl: URL?       // For LibriVox
+    var coverArtData: Data?     // For Local Uploads
+    
     var displayTitle: String {
-        // Clean up the title (remove common patterns)
         let cleaned = title
             .replacingOccurrences(of: "_Chapter.*", with: "", options: .regularExpression)
             .replacingOccurrences(of: "_Ch.*", with: "", options: .regularExpression)
@@ -25,6 +33,10 @@ struct Book: Identifiable, Codable {
             .replacingOccurrences(of: "_", with: " ")
             .trimmingCharacters(in: .whitespaces)
         return cleaned.isEmpty ? title : cleaned
+    }
+    
+    var displayAuthor: String {
+        author ?? "Unknown Author"
     }
 }
 
@@ -43,12 +55,10 @@ class BookManager: ObservableObject {
     
     // MARK: - Chapter Detection
     
-    /// Analyze uploaded files and group them into books
     func processUploadedTracks(_ tracks: [Track]) -> [Book] {
         var detectedBooks: [Book] = []
         var ungroupedTracks: [Track] = []
         
-        // Group tracks by base name
         var groupedByBase: [String: [Track]] = [:]
         
         for track in tracks {
@@ -59,32 +69,39 @@ class BookManager: ObservableObject {
             }
         }
         
-        // Create books from groups with 2+ chapters
         for (baseName, chapters) in groupedByBase {
             if chapters.count >= 2 {
-                // Sort chapters
                 let sortedChapters = chapters.sorted { track1, track2 in
                     extractChapterNumber(from: track1.filename) < extractChapterNumber(from: track2.filename)
                 }
                 
+                // Try to extract artwork & artist from the first chapter
+                let artData = extractArtwork(from: sortedChapters.first?.filename)
+                let artist = sortedChapters.first?.artist
+                
                 let book = Book(
                     title: baseName,
+                    author: artist,
+                    description: nil, // Local files usually don't have full descriptions
                     chapters: sortedChapters,
-                    dateAdded: Date()
+                    dateAdded: Date(),
+                    coverArtData: artData
                 )
                 detectedBooks.append(book)
             } else {
-                // Single file, don't group
                 ungroupedTracks.append(contentsOf: chapters)
             }
         }
         
-        // Create individual "books" for ungrouped tracks
         for track in ungroupedTracks {
+            let artData = extractArtwork(from: track.filename)
             let book = Book(
                 title: track.title,
+                author: track.artist,
+                description: nil,
                 chapters: [track],
-                dateAdded: Date()
+                dateAdded: Date(),
+                coverArtData: artData
             )
             detectedBooks.append(book)
         }
@@ -92,15 +109,29 @@ class BookManager: ObservableObject {
         return detectedBooks
     }
     
-    /// Detect base name from filename
+    private func extractArtwork(from filename: String?) -> Data? {
+        guard let filename = filename else { return nil }
+        let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let fileURL = documentsPath.appendingPathComponent(filename)
+        
+        let asset = AVURLAsset(url: fileURL)
+        for item in asset.commonMetadata {
+            // Check for artwork keys
+            if item.commonKey == .commonKeyArtwork {
+                if let data = item.dataValue {
+                    return data
+                }
+            }
+        }
+        return nil
+    }
+    
     private func detectBaseName(from filename: String) -> String? {
         let name = filename.replacingOccurrences(of: "\\.(mp3|m4a|m4b)$", with: "", options: .regularExpression)
-        
-        // Common patterns for chapters
         let patterns = [
             "(.+?)[-_\\s]*(Chapter|Ch|Part|Pt)[-_\\s]*\\d+",
-            "(.+?)[-_\\s]*\\d{2,3}",  // Ends with 2-3 digits
-            "(.+?)[-_\\s]*\\(\\d+\\)",  // Ends with (1), (2), etc.
+            "(.+?)[-_\\s]*\\d{2,3}",
+            "(.+?)[-_\\s]*\\(\\d+\\)",
         ]
         
         for pattern in patterns {
@@ -110,13 +141,10 @@ class BookManager: ObservableObject {
                 return String(name[range]).trimmingCharacters(in: .whitespaces)
             }
         }
-        
         return nil
     }
     
-    /// Extract chapter number from filename
     private func extractChapterNumber(from filename: String) -> Int {
-        // Look for numbers in the filename
         let patterns = [
             "Chapter[-_\\s]*(\\d+)",
             "Ch[-_\\s]*(\\d+)",
@@ -134,25 +162,61 @@ class BookManager: ObservableObject {
                 return number
             }
         }
-        
         return 0
     }
     
     // MARK: - Book Management
     
-    /// Add a book to the library
     func addBook(_ book: Book) {
         books.append(book)
         saveBooks()
     }
     
-    /// Remove a book
     func removeBook(_ book: Book) {
+        // Delete actual files
+        let fileManager = FileManager.default
+        let documentsPath = fileManager.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        
+        for chapter in book.chapters {
+            let fileURL = documentsPath.appendingPathComponent(chapter.filename)
+            try? fileManager.removeItem(at: fileURL)
+        }
+        
         books.removeAll { $0.id == book.id }
         saveBooks()
     }
     
-    /// Update book progress
+    func deleteChapter(at offsets: IndexSet, from book: Book) {
+        guard let bookIndex = books.firstIndex(where: { $0.id == book.id }) else { return }
+        
+        var updatedBook = books[bookIndex]
+        let fileManager = FileManager.default
+        let documentsPath = fileManager.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        
+        // Delete files for removed chapters
+        for index in offsets {
+            if index < updatedBook.chapters.count {
+                let chapter = updatedBook.chapters[index]
+                let fileURL = documentsPath.appendingPathComponent(chapter.filename)
+                try? fileManager.removeItem(at: fileURL)
+            }
+        }
+        
+        updatedBook.chapters.remove(atOffsets: offsets)
+        
+        // If book is empty, remove it entirely
+        if updatedBook.chapters.isEmpty {
+            removeBook(updatedBook)
+        } else {
+            // Adjust current index if needed
+            if updatedBook.currentChapterIndex >= updatedBook.chapters.count {
+                updatedBook.currentChapterIndex = max(0, updatedBook.chapters.count - 1)
+            }
+            books[bookIndex] = updatedBook
+            saveBooks()
+        }
+    }
+    
     func updateProgress(bookId: UUID, chapterIndex: Int, position: Double) {
         if let index = books.firstIndex(where: { $0.id == bookId }) {
             books[index].currentChapterIndex = chapterIndex

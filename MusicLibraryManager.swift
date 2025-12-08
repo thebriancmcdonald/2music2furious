@@ -64,7 +64,7 @@ class MusicLibraryManager: ObservableObject {
                 collection.items.contains { $0.assetURL != nil }
             }
             
-            // Load artists - check both artist and albumArtist fields
+            // Load artists
             let artistsQuery = MPMediaQuery.artists()
             let allArtists = artistsQuery.collections ?? []
             let playableArtists = allArtists.filter { collection in
@@ -84,12 +84,6 @@ class MusicLibraryManager: ObservableObject {
                 self?.artists = playableArtists
                 self?.playlists = playablePlaylists
                 self?.isLoading = false
-                
-                print("🎵 Library loaded:")
-                print("   - \(playableSongs.count) songs")
-                print("   - \(playableAlbums.count) albums")
-                print("   - \(playableArtists.count) artists")
-                print("   - \(playablePlaylists.count) playlists")
             }
         }
     }
