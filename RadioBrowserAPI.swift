@@ -119,7 +119,7 @@ class RadioBrowserAPI: ObservableObject {
             return
         }
         
-        print("📡 Fetching: \(url.absoluteString)")
+        print("ðŸ“¡ Fetching: \(url.absoluteString)")
         
         URLSession.shared.dataTask(with: url) { [weak self] data, response, error in
             DispatchQueue.main.async {

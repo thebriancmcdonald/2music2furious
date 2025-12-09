@@ -1,9 +1,9 @@
 //
 //  BookManager.swift
-//  2 Music 2 Furious - MILESTONE 8.8
+//  2 Music 2 Furious - MILESTONE 11
 //
 //  Shared Models, Download Logic, and Book Management
-//  FIX: Unique IDs for downloads (Ghost glitch), Duration Helper
+//  PERFORMANCE: Added duration caching to avoid repeated AVAsset creation
 //
 
 import Foundation
@@ -87,9 +87,8 @@ class LibriVoxDownloadManager: ObservableObject {
     
     @Published var downloadProgress: [String: Double] = [:]
     @Published var downloadingBookId: String?
-    @Published var completedChapters: Set<String> = [] // Stores "BookID_ChapterID"
+    @Published var completedChapters: Set<String> = []
     
-    // Helper to generate unique ID
     private func compositeId(bookId: String, chapterId: String) -> String {
         return "\(bookId)_\(chapterId)"
     }
@@ -116,7 +115,6 @@ class LibriVoxDownloadManager: ObservableObject {
                                 return num1 < num2
                             }
                         }
-                        // Update metadata
                         if existingBook.librivoxChapters == nil { existingBook.librivoxChapters = fullChapterList }
                         if existingBook.description == nil { existingBook.description = description }
                         if existingBook.author == nil { existingBook.author = author }
@@ -167,7 +165,6 @@ class LibriVoxDownloadManager: ObservableObject {
         return 0
     }
     
-    // Updated checks to require Book ID
     func isDownloading(bookId: String, chapterId: String) -> Bool {
         downloadProgress[compositeId(bookId: bookId, chapterId: chapterId)] != nil
     }
@@ -185,27 +182,69 @@ class BookManager: ObservableObject {
     private let userDefaults = UserDefaults.standard
     private let booksKey = "savedBooks"
     
+    // PERFORMANCE: Duration cache to avoid repeated AVAsset creation
+    private var durationCache: [String: String] = [:]
+    private let cacheQueue = DispatchQueue(label: "durationCache", attributes: .concurrent)
+    
     init() { loadBooks() }
     
+    // MARK: - Duration Calculation (Cached)
+    
     func getTrackDuration(track: Track) -> String {
+        // Thread-safe cache read
+        var cached: String?
+        cacheQueue.sync {
+            cached = durationCache[track.filename]
+        }
+        if let cached = cached {
+            return cached
+        }
+        
+        // Calculate duration
         let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         let fileURL = documentsPath.appendingPathComponent(track.filename)
+        
+        // Check if file exists first
+        guard FileManager.default.fileExists(atPath: fileURL.path) else {
+            return "--:--"
+        }
+        
         let asset = AVURLAsset(url: fileURL)
         let duration = asset.duration.seconds
         
-        if duration.isNaN || duration.isZero { return "--:--" }
-        
-        let seconds = Int(duration)
-        let h = seconds / 3600
-        let m = (seconds % 3600) / 60
-        let s = seconds % 60
-        
-        if h > 0 {
-            return String(format: "%d:%02d:%02d", h, m, s)
+        let result: String
+        if duration.isNaN || duration.isZero {
+            result = "--:--"
         } else {
-            return String(format: "%d:%02d", m, s)
+            let seconds = Int(duration)
+            let h = seconds / 3600
+            let m = (seconds % 3600) / 60
+            let s = seconds % 60
+            result = h > 0 ? String(format: "%d:%02d:%02d", h, m, s) : String(format: "%d:%02d", m, s)
+        }
+        
+        // Thread-safe cache write
+        cacheQueue.async(flags: .barrier) {
+            self.durationCache[track.filename] = result
+        }
+        
+        return result
+    }
+    
+    // Clear cache when files change
+    func clearDurationCache() {
+        cacheQueue.async(flags: .barrier) {
+            self.durationCache.removeAll()
         }
     }
+    
+    func clearDurationCache(for filename: String) {
+        cacheQueue.async(flags: .barrier) {
+            self.durationCache.removeValue(forKey: filename)
+        }
+    }
+    
+    // MARK: - Book Processing
     
     func processUploadedTracks(_ tracks: [Track]) -> [Book] {
         var detectedBooks: [Book] = []
@@ -279,7 +318,12 @@ class BookManager: ObservableObject {
         return 0
     }
     
-    func addBook(_ book: Book) { books.append(book); saveBooks() }
+    // MARK: - Book Management
+    
+    func addBook(_ book: Book) {
+        books.append(book)
+        saveBooks()
+    }
     
     func removeBook(_ book: Book) {
         let fileManager = FileManager.default
@@ -287,6 +331,7 @@ class BookManager: ObservableObject {
         for chapter in book.chapters {
             let fileURL = documentsPath.appendingPathComponent(chapter.filename)
             try? fileManager.removeItem(at: fileURL)
+            clearDurationCache(for: chapter.filename)
         }
         books.removeAll { $0.id == book.id }
         saveBooks()
@@ -303,6 +348,7 @@ class BookManager: ObservableObject {
                 let chapter = updatedBook.chapters[index]
                 let fileURL = documentsPath.appendingPathComponent(chapter.filename)
                 try? fileManager.removeItem(at: fileURL)
+                clearDurationCache(for: chapter.filename)
             }
         }
         
@@ -333,10 +379,15 @@ class BookManager: ObservableObject {
     }
     
     func saveBooks() {
-        if let encoded = try? JSONEncoder().encode(books) { userDefaults.set(encoded, forKey: booksKey) }
+        if let encoded = try? JSONEncoder().encode(books) {
+            userDefaults.set(encoded, forKey: booksKey)
+        }
     }
     
     private func loadBooks() {
-        if let data = userDefaults.data(forKey: booksKey), let decoded = try? JSONDecoder().decode([Book].self, from: data) { books = decoded }
+        if let data = userDefaults.data(forKey: booksKey),
+           let decoded = try? JSONDecoder().decode([Book].self, from: data) {
+            books = decoded
+        }
     }
 }

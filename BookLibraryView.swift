@@ -1,9 +1,8 @@
 //
 //  BookLibraryView.swift
-//  2 Music 2 Furious - MILESTONE 8.8
+//  2 Music 2 Furious - MILESTONE 11
 //
-//  Audiobook library
-//  Updates: Default filter is Downloaded, Time shown for local files
+//  Audiobook library - Uses SharedComponents for consistency
 //
 
 import SwiftUI
@@ -22,59 +21,71 @@ struct BookLibraryView: View {
     var body: some View {
         NavigationView {
             ZStack {
-                LinearGradient(colors: [Color.blue.opacity(0.1), Color.purple.opacity(0.1)], startPoint: .topLeading, endPoint: .bottomTrailing).ignoresSafeArea()
+                GlassBackgroundView()
                 
-                if bookManager.books.isEmpty { emptyStateView }
-                else {
+                if bookManager.books.isEmpty {
+                    GlassEmptyStateView(
+                        icon: "books.vertical",
+                        title: "Your Library is Empty",
+                        subtitle: "Import files from your device or\nsearch the public domain.",
+                        actions: [
+                            (icon: "square.and.arrow.up", title: "Upload Files", action: { showingFilePicker = true }),
+                            (icon: "magnifyingglass", title: "Search LibriVox", action: { showingLibriVox = true })
+                        ]
+                    )
+                } else {
                     List {
                         ForEach(bookManager.books) { book in
                             ZStack {
                                 NavigationLink(destination: LocalBookDetailView(book: book, bookManager: bookManager, onPlayChapter: { index in playBook(book, startingAt: index) })) { EmptyView() }.opacity(0)
                                 GlassBookRow(book: book, onPlay: { playBook(book) })
                             }
-                            .listRowBackground(Color.clear).listRowSeparator(.hidden).listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
-                            .swipeActions(edge: .trailing, allowsFullSwipe: true) { Button(role: .destructive) { bookManager.removeBook(book) } label: { Label("Delete", systemImage: "trash") } }
+                            .glassListRow()
+                            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                                Button(role: .destructive) { bookManager.removeBook(book) } label: { Label("Delete", systemImage: "trash") }
+                            }
                         }
                     }
-                    .listStyle(.plain).scrollContentBackground(.hidden)
+                    .listStyle(.plain)
+                    .scrollContentBackground(.hidden)
+                    .tint(.royalPurple)
                 }
                 
                 if showingToast {
-                    VStack { Spacer(); BookToastView(message: toastMessage).padding(.bottom, 20) }
-                        .transition(.move(edge: .bottom).combined(with: .opacity)).animation(.spring(), value: showingToast).zIndex(100)
+                    VStack { Spacer(); GlassToastView(message: toastMessage).padding(.bottom, 20) }
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                        .animation(.spring(), value: showingToast)
+                        .zIndex(100)
                 }
             }
-            .navigationTitle("Books").navigationBarTitleDisplayMode(.inline)
+            .navigationTitle("Books")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button(action: { dismiss() }) { Image(systemName: "xmark").font(.system(size: 16, weight: .semibold)).foregroundColor(.primary) } }
+                ToolbarItem(placement: .cancellationAction) {
+                    GlassCloseButton(action: dismiss)
+                }
                 ToolbarItemGroup(placement: .primaryAction) {
-                    Button { showingFilePicker = true } label: { Image(systemName: "square.and.arrow.up") }
-                    Button { showingLibriVox = true } label: { Image(systemName: "magnifyingglass") }
+                    // UPDATED: Forced White for visibility against dark header
+                    Button { showingFilePicker = true } label: {
+                        Image(systemName: "square.and.arrow.up")
+                            .foregroundColor(.white)
+                    }
+                    
+                    Button { showingLibriVox = true } label: {
+                        Image(systemName: "magnifyingglass")
+                            .foregroundColor(.white)
+                    }
                 }
             }
-            .fileImporter(isPresented: $showingFilePicker, allowedContentTypes: [.audio], allowsMultipleSelection: true) { result in handleFileUpload(result: result) }
-            .sheet(isPresented: $showingLibriVox) { LibriVoxSearchView(bookManager: bookManager, dismiss: { showingLibriVox = false }) }
+            .fileImporter(isPresented: $showingFilePicker, allowedContentTypes: [.audio], allowsMultipleSelection: true) { result in
+                handleFileUpload(result: result)
+            }
+            .sheet(isPresented: $showingLibriVox) {
+                LibriVoxSearchView(bookManager: bookManager, dismiss: { showingLibriVox = false })
+            }
         }
-    }
-    
-    private var emptyStateView: some View {
-        VStack(spacing: 24) {
-            Spacer()
-            ZStack { Circle().fill(.ultraThinMaterial).frame(width: 120, height: 120); Image(systemName: "books.vertical").font(.system(size: 50)).foregroundColor(.secondary) }
-            VStack(spacing: 8) { Text("Your Library is Empty").font(.title3.weight(.semibold)); Text("Import files from your device or\nsearch the public domain.").font(.subheadline).foregroundColor(.secondary).multilineTextAlignment(.center) }.padding(.horizontal)
-            HStack(spacing: 16) {
-                glassButton(icon: "square.and.arrow.up", title: "Upload File", action: { showingFilePicker = true })
-                glassButton(icon: "magnifyingglass", title: "Search LibriVox", action: { showingLibriVox = true })
-            }.padding(.horizontal, 24).padding(.top, 10)
-            Spacer()
-        }
-    }
-    
-    private func glassButton(icon: String, title: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            VStack(spacing: 12) { Image(systemName: icon).font(.system(size: 24)); Text(title).font(.system(size: 14, weight: .medium)) }
-                .foregroundColor(.primary).frame(maxWidth: .infinity).padding(.vertical, 20).background(.ultraThinMaterial).cornerRadius(16).overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.white.opacity(0.2), lineWidth: 1)).shadow(color: Color.black.opacity(0.05), radius: 10, x: 0, y: 5)
-        }
+        .accentColor(.royalPurple)
+        .tint(.royalPurple)
     }
     
     private func handleFileUpload(result: Result<[URL], Error>) {
@@ -115,12 +126,13 @@ struct BookLibraryView: View {
     }
     
     private func showToast(_ message: String) {
-        toastMessage = message; withAnimation { showingToast = true }
+        toastMessage = message
+        withAnimation { showingToast = true }
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { withAnimation { showingToast = false } }
     }
 }
 
-// MARK: - Local Book Detail View (The Smart View)
+// MARK: - Local Book Detail View
 
 struct LocalBookDetailView: View {
     let book: Book
@@ -129,7 +141,7 @@ struct LocalBookDetailView: View {
     
     let onPlayChapter: (Int) -> Void
     
-    @State private var filter: FilterOption = .downloaded // FIX: Default to downloaded
+    @State private var filter: FilterOption = .downloaded
     @State private var toastMessage = ""
     @State private var showingToast = false
     
@@ -141,7 +153,6 @@ struct LocalBookDetailView: View {
     var chaptersToDisplay: [DisplayChapter] {
         if filter == .downloaded {
             return book.chapters.enumerated().map { (index, track) in
-                // For downloaded tracks, calculate duration locally using BookManager
                 let duration = bookManager.getTrackDuration(track: track)
                 return DisplayChapter(index: index, title: track.title, isDownloaded: true, filename: track.filename, remoteChapter: nil, duration: duration)
             }
@@ -175,38 +186,46 @@ struct LocalBookDetailView: View {
     
     var body: some View {
         ZStack {
-            LinearGradient(colors: [Color.blue.opacity(0.1), Color.purple.opacity(0.1)], startPoint: .topLeading, endPoint: .bottomTrailing).ignoresSafeArea()
+            GlassBackgroundView()
             
             List {
                 Section {
                     VStack(spacing: 20) {
-                        HStack(alignment: .top, spacing: 16) {
-                            ZStack {
-                                if let data = book.coverArtData, let uiImage = UIImage(data: data) { Image(uiImage: uiImage).resizable().aspectRatio(contentMode: .fill) }
-                                else if let url = book.coverArtUrl { AsyncImage(url: url) { phase in if let image = phase.image { image.resizable().aspectRatio(contentMode: .fill) } else { Color.purple.opacity(0.1); ProgressView() } } }
-                                else { Color.purple.opacity(0.1); Image(systemName: "book.fill").font(.system(size: 40)).foregroundColor(.purple) }
-                            }.frame(width: 100, height: 100).cornerRadius(20).shadow(radius: 5)
-                            
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text(book.displayTitle).font(.title3.weight(.bold)).fixedSize(horizontal: false, vertical: true)
-                                Text(book.displayAuthor).font(.subheadline).foregroundColor(.secondary)
-                                Text("\(book.chapters.count) of \(book.librivoxChapters?.count ?? book.chapters.count) Downloaded").font(.caption).foregroundColor(.secondary)
-                            }
-                            Spacer()
-                        }
-                        .padding().background(.ultraThinMaterial).cornerRadius(24)
+                        // Header using shared component
+                        MediaDetailHeader(
+                            title: book.displayTitle,
+                            subtitle: book.displayAuthor,
+                            tertiaryText: "\(book.chapters.count) of \(book.librivoxChapters?.count ?? book.chapters.count) Downloaded",
+                            artworkURL: book.coverArtUrl,
+                            artworkData: book.coverArtData,
+                            artworkIcon: "book.fill",
+                            artworkColor: .royalPurple
+                        )
                         
-                        Button(action: { onPlayChapter(book.currentChapterIndex) }) {
-                            HStack { Image(systemName: "play.fill"); Text("Resume") }
-                                .font(.headline).foregroundColor(.white).padding(.vertical, 14).frame(maxWidth: .infinity).background(Color.blue).cornerRadius(16).shadow(color: Color.blue.opacity(0.3), radius: 5, x: 0, y: 5)
-                        }.buttonStyle(PlainButtonStyle())
+                        // Resume Button
+                        GlassActionButton(
+                            title: "Resume",
+                            icon: "play.fill",
+                            color: .deepResumePurple, // UPDATED: Darker purple for large area
+                            action: { onPlayChapter(book.currentChapterIndex) }
+                        )
                         
+                        // Description
                         if let desc = book.description, !desc.isEmpty {
-                            LocalDescriptionView(text: desc.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression))
+                            ExpandableDescriptionView(
+                                text: desc.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression),
+                                color: .royalPurple
+                            )
+                            .tint(.royalPurple)
+                            .accentColor(.royalPurple)
                         }
                         
-                        Picker("Filter", selection: $filter) { ForEach(FilterOption.allCases, id: \.self) { option in Text(option.rawValue).tag(option) } }
-                            .pickerStyle(SegmentedPickerStyle())
+                        // Filter
+                        GlassSegmentedFilter(
+                            selection: $filter,
+                            options: FilterOption.allCases.map { ($0, $0.rawValue) },
+                            color: .royalPurple
+                        )
                     }
                     .padding(.bottom, 10)
                 }
@@ -216,51 +235,35 @@ struct LocalBookDetailView: View {
                 
                 Section {
                     ForEach(chaptersToDisplay) { chapter in
-                        HStack(spacing: 12) {
-                            Text("\(chapter.index + 1)").font(.caption.weight(.bold)).foregroundColor(.secondary).frame(width: 25)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(chapter.title).font(.system(size: 15, weight: .medium)).foregroundColor(.primary).lineLimit(1)
-                                // FIX: Show duration for both local and remote
-                                Text(chapter.duration).font(.caption).foregroundColor(.secondary)
-                            }
-                            Spacer()
-                            
-                            if chapter.isDownloaded {
-                                Button {
-                                    if let filename = chapter.filename, let realIndex = book.chapters.firstIndex(where: { $0.filename == filename }) {
-                                        onPlayChapter(realIndex)
-                                    }
-                                } label: {
-                                    if let filename = chapter.filename, let realIndex = book.chapters.firstIndex(where: { $0.filename == filename }), realIndex == book.currentChapterIndex {
-                                        Image(systemName: "waveform").foregroundColor(.blue).font(.caption)
-                                    } else {
-                                        Image(systemName: "play.fill").font(.caption).foregroundColor(.secondary.opacity(0.5))
-                                    }
+                        GlassChapterRow(
+                            index: chapter.index,
+                            title: chapter.title,
+                            duration: chapter.duration,
+                            isDownloaded: chapter.isDownloaded,
+                            isPlaying: chapter.filename != nil && book.chapters.firstIndex(where: { $0.filename == chapter.filename }) == book.currentChapterIndex,
+                            isDownloading: chapter.remoteChapter != nil && downloadManager.isDownloading(bookId: book.librivoxChapters?.first?.id ?? "", chapterId: chapter.remoteChapter!.id),
+                            color: .royalPurple,
+                            onPlay: chapter.isDownloaded ? {
+                                if let filename = chapter.filename, let realIndex = book.chapters.firstIndex(where: { $0.filename == filename }) {
+                                    onPlayChapter(realIndex)
                                 }
-                                .buttonStyle(BorderlessButtonStyle())
-                            } else {
-                                if let remote = chapter.remoteChapter {
-                                    if downloadManager.isDownloading(bookId: book.librivoxChapters?.first?.id ?? "", chapterId: remote.id) {
-                                        ProgressView().scaleEffect(0.8)
-                                    } else {
-                                        Button {
-                                            // Pass Book ID (usually derived from first chapter section or API book ID if we had it, but here we can rely on title if ID not saved, but best to use book ID if possible. Since we only save chapters, we might need to rely on title as ID or similar).
-                                            // Actually, we need a stable book ID. For existing books, use the one from metadata if saved.
-                                            // Since Book struct doesn't save LibriVox Book ID specifically (only UUID), we use the one from the remote chapter's parent logic.
-                                            // Wait, downloadSingleChapter needs a bookId to track progress. We should use book.title or UUID if we don't have LibriVox ID saved.
-                                            // To fix the ghost issue properly, we need a stable ID. Let's use book.title as the "Book ID" for tracking since that's unique enough for our local DB.
-                                            downloadManager.downloadSingleChapter(chapter: remote, bookId: book.title, bookTitle: book.title, author: book.displayAuthor, coverUrl: book.coverArtUrl, description: book.description, index: chapter.index, bookManager: bookManager, fullChapterList: book.librivoxChapters)
-                                            showToast("Downloading...")
-                                        } label: { Image(systemName: "arrow.down.circle").foregroundColor(.blue).font(.system(size: 20)) }
-                                            .buttonStyle(BorderlessButtonStyle())
-                                    }
-                                }
-                            }
-                        }
-                        .padding(12).background(.ultraThinMaterial).cornerRadius(12)
-                        .listRowBackground(Color.clear)
-                        .listRowSeparator(.hidden)
-                        .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+                            } : nil,
+                            onDownload: !chapter.isDownloaded && chapter.remoteChapter != nil ? {
+                                downloadManager.downloadSingleChapter(
+                                    chapter: chapter.remoteChapter!,
+                                    bookId: book.title,
+                                    bookTitle: book.title,
+                                    author: book.displayAuthor,
+                                    coverUrl: book.coverArtUrl,
+                                    description: book.description,
+                                    index: chapter.index,
+                                    bookManager: bookManager,
+                                    fullChapterList: book.librivoxChapters
+                                )
+                                showToast("Downloading...")
+                            } : nil
+                        )
+                        .glassListRow()
                         .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                             if chapter.isDownloaded, let filename = chapter.filename {
                                 Button(role: .destructive) {
@@ -274,52 +277,55 @@ struct LocalBookDetailView: View {
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
             
-            if showingToast { VStack { Spacer(); BookToastView(message: toastMessage).padding(.bottom, 20) }.transition(.move(edge: .bottom).combined(with: .opacity)).animation(.spring(), value: showingToast).zIndex(100) }
+            if showingToast {
+                VStack { Spacer(); GlassToastView(message: toastMessage, icon: "arrow.down.circle.fill", iconColor: .royalPurple).padding(.bottom, 20) }
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .animation(.spring(), value: showingToast)
+                    .zIndex(100)
+            }
         }
-        .navigationTitle("").navigationBarTitleDisplayMode(.inline)
+        .navigationTitle("")
+        .navigationBarTitleDisplayMode(.inline)
     }
     
-    private func showToast(_ message: String) { toastMessage = message; withAnimation { showingToast = true }; DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { withAnimation { showingToast = false } } }
-}
-
-struct LocalDescriptionView: View {
-    let text: String; @State private var isExpanded = false
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Description").font(.headline)
-            Text(text).font(.system(size: 15)).foregroundColor(.secondary).lineLimit(isExpanded ? nil : 4).animation(.spring(), value: isExpanded)
-            Button(action: { withAnimation { isExpanded.toggle() } }) { Text(isExpanded ? "Show Less" : "Show More").font(.caption.weight(.bold)).foregroundColor(.blue) }
-        }
-        .padding()
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.ultraThinMaterial).cornerRadius(16).onTapGesture { withAnimation { isExpanded.toggle() } }
+    private func showToast(_ message: String) {
+        toastMessage = message
+        withAnimation { showingToast = true }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { withAnimation { showingToast = false } }
     }
 }
+
+// MARK: - Glass Book Row
 
 struct GlassBookRow: View {
-    let book: Book; let onPlay: () -> Void
+    let book: Book
+    let onPlay: () -> Void
+    
     var body: some View {
         HStack(spacing: 12) {
-            ZStack {
-                if let data = book.coverArtData, let uiImage = UIImage(data: data) { Image(uiImage: uiImage).resizable().aspectRatio(contentMode: .fill) }
-                else if let url = book.coverArtUrl { AsyncImage(url: url) { phase in if let image = phase.image { image.resizable().aspectRatio(contentMode: .fill) } else { Color.purple.opacity(0.1) } } }
-                else { RoundedRectangle(cornerRadius: 12).fill(Color.purple.opacity(0.1)); Image(systemName: "book.fill").font(.system(size: 24)).foregroundColor(.purple) }
-            }.frame(width: 50, height: 50).cornerRadius(8).clipped()
+            MediaArtworkView(
+                url: book.coverArtUrl,
+                data: book.coverArtData,
+                size: 50,
+                cornerRadius: 8,
+                fallbackIcon: "book.fill",
+                fallbackColor: .royalPurple
+            )
+            
             VStack(alignment: .leading, spacing: 2) {
-                Text(book.displayTitle).font(.system(size: 16, weight: .medium)).foregroundColor(.primary).lineLimit(1)
-                Text("\(book.chapters.count) of \(book.librivoxChapters?.count ?? book.chapters.count) chapters").font(.caption).foregroundColor(.secondary)
+                Text(book.displayTitle)
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundColor(.primary)
+                    .lineLimit(1)
+                Text("\(book.chapters.count) of \(book.librivoxChapters?.count ?? book.chapters.count) chapters")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
             }
             Spacer()
-            Button(action: onPlay) { Image(systemName: "play.circle.fill").font(.system(size: 28)).foregroundColor(.blue.opacity(0.8)).shadow(radius: 2) }.buttonStyle(BorderlessButtonStyle())
+            
+            GlassPlayButton(size: 28, color: .royalPurple, action: onPlay)
         }
-        .padding(12).background(.ultraThinMaterial).cornerRadius(12).overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.2), lineWidth: 1)).shadow(color: Color.black.opacity(0.05), radius: 5, x: 0, y: 2)
-    }
-}
-
-struct BookToastView: View {
-    let message: String
-    var body: some View {
-        HStack(spacing: 10) { Image(systemName: "checkmark.circle.fill").foregroundColor(.green); Text(message).font(.subheadline.weight(.medium)) }
-            .padding(.horizontal, 20).padding(.vertical, 12).background(.thinMaterial).clipShape(Capsule()).shadow(color: .black.opacity(0.15), radius: 10, x: 0, y: 5)
+        .padding(12)
+        .glassCard()
     }
 }

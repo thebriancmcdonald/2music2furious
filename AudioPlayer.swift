@@ -1,11 +1,11 @@
 //
 //  AudioPlayer.swift
-//  2 Music 2 Furious - MILESTONE 10.2
+//  2 Music 2 Furious - MILESTONE 11
 //
-//  FIXES:
-//  - "High Gain" Boost increased to 4.0x (+12dB)
-//  - Uses 'AVAudioMixerNode' for guaranteed compilation
-//  - Restored 'currentTime' and 'duration' for UI sliders
+//  PERFORMANCE UPDATES:
+//  - Added artwork caching (static cache across instances)
+//  - Batched state updates to reduce view rebuilds
+//  - Improved seek handling
 //
 
 import Foundation
@@ -40,7 +40,7 @@ class AudioPlayer: NSObject, ObservableObject {
     
     @Published var isBoostEnabled = false {
         didSet {
-            updateAudioEffects() // Toggles the Gain Boost
+            updateAudioEffects()
         }
     }
     
@@ -52,6 +52,19 @@ class AudioPlayer: NSObject, ObservableObject {
                 avPlayer?.rate = isPlaying ? playbackSpeed : 0
             }
         }
+    }
+    
+    // MARK: - Artwork Cache (Static for performance)
+    
+    private static var artworkCache: [String: UIImage] = [:]
+    private static let cacheQueue = DispatchQueue(label: "artworkCache", attributes: .concurrent)
+    
+    private static func getCachedArtwork(for key: String) -> UIImage? {
+        cacheQueue.sync { artworkCache[key] }
+    }
+    
+    private static func setCachedArtwork(_ image: UIImage, for key: String) {
+        cacheQueue.async(flags: .barrier) { artworkCache[key] = image }
     }
     
     // MARK: - Computed Properties
@@ -70,7 +83,6 @@ class AudioPlayer: NSObject, ObservableObject {
     
     var currentTime: Double {
         if isUsingEngine {
-            // Calculate engine time: Offset + (NodesElapsedFrames / SampleRate)
             guard isPlaying,
                   let nodeTime = playerNode.lastRenderTime,
                   let playerTime = playerNode.playerTime(forNodeTime: nodeTime) else {
@@ -83,17 +95,17 @@ class AudioPlayer: NSObject, ObservableObject {
         }
     }
     
-    // MARK: - Engine Properties (The "Pro" Stack)
+    // MARK: - Engine Properties
     
     private let engine = AVAudioEngine()
     private let playerNode = AVAudioPlayerNode()
     private let timePitchNode = AVAudioUnitTimePitch()
-    private let boosterNode = AVAudioMixerNode() // REPLACEMENT: Dedicated Gain Stage
+    private let boosterNode = AVAudioMixerNode()
     
     // Engine State
     private var audioFile: AVAudioFile?
     private var audioSampleRate: Double = 44100
-    private var seekOffset: TimeInterval = 0 // Tracks position manually for Engine
+    private var seekOffset: TimeInterval = 0
     private var isUsingEngine = false
     
     // Legacy / Stream Player
@@ -113,18 +125,14 @@ class AudioPlayer: NSObject, ObservableObject {
     }
     
     private func setupEngine() {
-        // Attach Nodes
         engine.attach(playerNode)
         engine.attach(timePitchNode)
-        engine.attach(boosterNode) // Attach our gain booster
+        engine.attach(boosterNode)
         
-        // Connect Chain: Player -> TimePitch (Speed) -> Booster (Gain) -> Main Mixer
-        // Note: We use the engine's main mixer as the final output
         engine.connect(playerNode, to: timePitchNode, format: nil)
         engine.connect(timePitchNode, to: boosterNode, format: nil)
         engine.connect(boosterNode, to: engine.mainMixerNode, format: nil)
         
-        // Default Booster Volume (1.0 = standard)
         boosterNode.outputVolume = 1.0
     }
     
@@ -132,15 +140,10 @@ class AudioPlayer: NSObject, ObservableObject {
     
     private func updateAudioEffects() {
         if isUsingEngine {
-            // "BOOM" MODE:
-            // 4.0 is approx +12dB. Pushing it hard but safe enough.
             boosterNode.outputVolume = isBoostEnabled ? 4.0 : 1.0
-            
-            // Handle Ducking via the MAIN mixer to avoid conflicting with the boost
             engine.mainMixerNode.outputVolume = isDucking ? 0.2 : volume
         }
         
-        // Also update Audio Session Mode
         do {
             let session = AVAudioSession.sharedInstance()
             try session.setMode(isBoostEnabled ? .spokenAudio : .default)
@@ -149,8 +152,6 @@ class AudioPlayer: NSObject, ObservableObject {
     
     private func updatePlayerVolume() {
         if isUsingEngine {
-            // Volume is controlled by the Main Mixer (final stage)
-            // The booster node handles the "Boost" offset separately
             let targetVol = isDucking ? volume * 0.2 : volume
             engine.mainMixerNode.outputVolume = targetVol
         } else {
@@ -160,26 +161,53 @@ class AudioPlayer: NSObject, ObservableObject {
         }
     }
     
-    // MARK: - Artwork Extraction
+    // MARK: - Artwork Extraction (with Caching)
     
     private func extractArtwork(from asset: AVURLAsset) {
+        let urlKey = asset.url.absoluteString
+        
+        // Check cache first
+        if let cached = Self.getCachedArtwork(for: urlKey) {
+            DispatchQueue.main.async {
+                withAnimation(.easeIn(duration: 0.3)) {
+                    self.artwork = cached
+                }
+            }
+            return
+        }
+        
         DispatchQueue.main.async { self.artwork = nil }
         
         let url = asset.url
         if url.absoluteString.contains("ipod-library") {
             if let libraryArt = extractLibraryArtwork(url: url) {
-                DispatchQueue.main.async { self.artwork = libraryArt }
+                Self.setCachedArtwork(libraryArt, for: urlKey)
+                DispatchQueue.main.async {
+                    withAnimation(.easeIn(duration: 0.3)) {
+                        self.artwork = libraryArt
+                    }
+                }
             }
             return
         }
         
         Task {
             if let image = await extractCommonArtwork(from: asset) {
-                await MainActor.run { self.updateArtwork(image) }
+                Self.setCachedArtwork(image, for: urlKey)
+                await MainActor.run {
+                    withAnimation(.easeIn(duration: 0.3)) {
+                        self.artwork = image
+                    }
+                }
                 return
             }
             if let image = await extractAllMetadata(from: asset) {
-                await MainActor.run { self.updateArtwork(image) }
+                Self.setCachedArtwork(image, for: urlKey)
+                await MainActor.run {
+                    withAnimation(.easeIn(duration: 0.3)) {
+                        self.artwork = image
+                    }
+                }
             }
         }
     }
@@ -224,10 +252,6 @@ class AudioPlayer: NSObject, ObservableObject {
             }
         } catch { return nil }
         return nil
-    }
-    
-    private func updateArtwork(_ image: UIImage) {
-        withAnimation(.easeIn(duration: 0.5)) { self.artwork = image }
     }
 
     // MARK: - Position Memory
@@ -275,32 +299,36 @@ class AudioPlayer: NSObject, ObservableObject {
     func loadTrack(at index: Int) {
         guard index >= 0 && index < queue.count else { return }
         saveCurrentPosition()
+        
+        // Batch state updates
+        let track = queue[index]
         currentIndex = index
-        currentTrack = queue[index]
+        currentTrack = track
+        
         stopCurrentPlayback()
         
-        guard let track = currentTrack else { return }
-        if track.filename.starts(with: "ipod-library://") { loadFromAssetURL(track.filename) }
-        else if track.filename.starts(with: "http") { loadRadioStream() }
-        else { loadLocalFile() }
+        if track.filename.starts(with: "ipod-library://") {
+            loadFromAssetURL(track.filename)
+        } else if track.filename.starts(with: "http") {
+            loadRadioStream()
+        } else {
+            loadLocalFile()
+        }
     }
     
     private func loadTrackAndPlay(at index: Int) {
         loadTrack(at: index)
-        // For AVPlayer (Stream), we wait for ready. For Engine (Local), we play immediately.
         if isUsingEngine { play() }
     }
     
     private func stopCurrentPlayback() {
         saveCurrentPosition()
         
-        // Stop Engine
         if engine.isRunning {
             playerNode.stop()
             engine.stop()
         }
         
-        // Stop AVPlayer
         avPlayer?.pause()
         if let observer = timeObserver { avPlayer?.removeTimeObserver(observer); timeObserver = nil }
         playerItemObserver?.invalidate()
@@ -320,7 +348,6 @@ class AudioPlayer: NSObject, ObservableObject {
         extractArtwork(from: asset)
         let item = AVPlayerItem(asset: asset)
         setupAVPlayer(with: item)
-        // Note: Engine is NOT used for Library assets to respect DRM/Protected content usually
     }
     
     private func loadRadioStream() {
@@ -329,7 +356,6 @@ class AudioPlayer: NSObject, ObservableObject {
         self.artwork = nil
         let item = AVPlayerItem(url: url)
         setupAVPlayer(with: item)
-        // Note: Engine is not used for streams to avoid complex buffer management
     }
     
     private func setupAVPlayer(with item: AVPlayerItem) {
@@ -337,12 +363,11 @@ class AudioPlayer: NSObject, ObservableObject {
         updatePlayerVolume()
         setupEndObserver(for: item)
         
-        // Add Ready Observer
         playerItemObserver = item.observe(\.status, options: [.new]) { [weak self] item, _ in
             if item.status == .readyToPlay {
                 DispatchQueue.main.async {
                     self?.restoreSavedPosition()
-                    if self?.currentTrack?.filename.starts(with: "http") == true { self?.play() } // Auto play radio
+                    if self?.currentTrack?.filename.starts(with: "http") == true { self?.play() }
                 }
             }
         }
@@ -352,19 +377,15 @@ class AudioPlayer: NSObject, ObservableObject {
         guard let track = currentTrack else { return }
         let path = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent(track.filename)
         
-        // EXTRACT ARTWORK
         let asset = AVURLAsset(url: path)
         extractArtwork(from: asset)
         
-        // SETUP ENGINE FOR LOCAL FILE
         do {
             isUsingEngine = true
             audioFile = try AVAudioFile(forReading: path)
             audioSampleRate = audioFile!.processingFormat.sampleRate
             
             engine.reset()
-            // We need to re-connect if the format changed, but usually standard connect works.
-            // Schedule the file
             scheduleFileSegment(from: 0)
             
             try engine.start()
@@ -373,7 +394,6 @@ class AudioPlayer: NSObject, ObservableObject {
             
         } catch {
             print("Error loading local file into Engine: \(error)")
-            // Fallback?
         }
     }
     
@@ -386,15 +406,11 @@ class AudioPlayer: NSObject, ObservableObject {
         guard remainingFrames > 0 else { return }
         
         playerNode.stop()
-        if remainingFrames > 100 { // Check simply to avoid tiny segment errors
-            playerNode.scheduleSegment(file, startingFrame: startFrame, frameCount: remainingFrames, at: nil) {
-                // Completion handler (End of file)
-                // Note: This is called when buffer is empty, not necessarily playback end
-            }
+        if remainingFrames > 100 {
+            playerNode.scheduleSegment(file, startingFrame: startFrame, frameCount: remainingFrames, at: nil) { }
         }
         seekOffset = startTime
         
-        // Re-apply Speed
         timePitchNode.rate = playbackSpeed
     }
     
@@ -425,7 +441,7 @@ class AudioPlayer: NSObject, ObservableObject {
             playerNode.play()
         } else {
             avPlayer?.play()
-            avPlayer?.rate = playbackSpeed // Re-apply speed
+            avPlayer?.rate = playbackSpeed
         }
         isPlaying = true
     }
@@ -434,7 +450,7 @@ class AudioPlayer: NSObject, ObservableObject {
         saveCurrentPosition()
         if isUsingEngine {
             playerNode.pause()
-            engine.pause() // Pause engine to save battery
+            engine.pause()
         } else {
             avPlayer?.pause()
         }
@@ -449,7 +465,7 @@ class AudioPlayer: NSObject, ObservableObject {
         let wasPlaying = isPlaying
         currentIndex = (currentIndex + 1) % queue.count
         loadTrackAndPlay(at: currentIndex)
-        if !wasPlaying { pause() } // Keep paused if we were paused
+        if !wasPlaying { pause() }
     }
     
     func previous() {
@@ -522,6 +538,14 @@ class AudioPlayer: NSObject, ObservableObject {
     
     func addRadioStream(name: String, streamURL: String) { playNow(Track(title: name, artist: "Radio", filename: streamURL)) }
     func playFromQueue(at index: Int) { loadTrackAndPlay(at: index) }
+    
+    // MARK: - Cache Management
+    
+    static func clearArtworkCache() {
+        cacheQueue.async(flags: .barrier) {
+            artworkCache.removeAll()
+        }
+    }
     
     deinit {
         NotificationCenter.default.removeObserver(self)

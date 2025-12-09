@@ -1,9 +1,9 @@
 //
 //  ContentView.swift
-//  2 Music 2 Furious - MILESTONE 9.4
+//  2 Music 2 Furious - MILESTONE 11
 //
 //  Main app view with dual audio players
-//  Layout: Label -> Title -> Seek -> Controls -> [Up Next Card] -> Action Buttons
+//  UPDATES: Optimized SeekBarView, uses SharedComponents
 //
 
 import SwiftUI
@@ -203,12 +203,13 @@ struct ContentView: View {
                     Button(action: { backgroundModeEnabled.toggle() }) {
                         HStack(spacing: 4) {
                             Image(systemName: backgroundModeEnabled ? "speaker.zzz.fill" : "speaker.wave.3.fill")
-                            Text("BG MODE").font(.system(size: 10, weight: .bold))
+                            Text("QUIET").font(.system(size: 10, weight: .bold))
                         }
                         .padding(6)
-                        .background(backgroundModeEnabled ? Color.purple.opacity(0.6) : Color.black.opacity(0.4))
+                        // UPDATED: Uses deepResumePurple
+                        .background(backgroundModeEnabled ? Color.deepResumePurple : Color.black.opacity(0.4))
                         .clipShape(Capsule())
-                        .overlay(Capsule().stroke(backgroundModeEnabled ? Color.purple : Color.white.opacity(0.3), lineWidth: 1))
+                        .overlay(Capsule().stroke(backgroundModeEnabled ? Color.royalPurple : Color.white.opacity(0.3), lineWidth: 1))
                     }.foregroundColor(.white)
                 }
             }
@@ -270,9 +271,10 @@ struct ContentView: View {
                             Text("BOOST").font(.system(size: 10, weight: .bold))
                         }
                         .padding(6)
-                        .background(voiceBoostEnabled ? Color.green.opacity(0.6) : Color.black.opacity(0.4))
+                        // UPDATED: Uses deepResumePurple
+                        .background(voiceBoostEnabled ? Color.deepResumePurple : Color.black.opacity(0.4))
                         .clipShape(Capsule())
-                        .overlay(Capsule().stroke(voiceBoostEnabled ? Color.green : Color.white.opacity(0.3), lineWidth: 1))
+                        .overlay(Capsule().stroke(voiceBoostEnabled ? Color.royalPurple : Color.white.opacity(0.3), lineWidth: 1))
                     }.foregroundColor(.white)
                 }
             }
@@ -309,7 +311,7 @@ struct ContentView: View {
             let session = AVAudioSession.sharedInstance()
             try session.setCategory(.playback, mode: .default)
             try session.setActive(true)
-        } catch { print("❌ Failed to setup audio session: \(error)") }
+        } catch { print("Failed to setup audio session: \(error)") }
     }
     
     private func setupGlobalRemoteCommands() {
@@ -488,10 +490,10 @@ struct UpNextView: View {
                     .background(Capsule().fill(.white.opacity(0.2)))
                 }
             }
-            .padding(12) // Inner padding
+            .padding(12)
             .background(
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(Color.white.opacity(0.1)) // Lighter inset background
+                    .fill(Color.white.opacity(0.1))
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -521,22 +523,69 @@ struct VerticalVolumeView: View {
     }
 }
 
+// MARK: - Optimized SeekBar with Threshold-Based Updates
+
 struct SeekBarView: View {
     @ObservedObject var player: AudioPlayer
     @State private var sliderValue: Double = 0
+    @State private var displayTime: Double = 0
     @State private var isDragging: Bool = false
+    
     let timer = Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()
+    
     var body: some View {
         HStack(spacing: 8) {
-            Text(formatTime(sliderValue)).font(.system(size: 10, weight: .bold, design: .monospaced)).foregroundStyle(.white.opacity(0.8)).frame(width: 40, alignment: .leading)
-            Slider(value: Binding(get: { isDragging ? sliderValue : player.currentTime }, set: { isDragging = true; sliderValue = $0 }), in: 0...(player.duration > 0 ? player.duration : 1)) { editing in
-                if !editing { player.seek(to: sliderValue); isDragging = false }
-            }.tint(.white).disabled(player.duration == 0)
-            Text("-" + formatTime((player.duration - sliderValue))).font(.system(size: 10, weight: .bold, design: .monospaced)).foregroundStyle(.white.opacity(0.8)).frame(width: 45, alignment: .trailing)
+            Text(formatTime(displayTime))
+                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.8))
+                .frame(width: 40, alignment: .leading)
+            
+            Slider(
+                value: $sliderValue,
+                in: 0...(player.duration > 0 ? player.duration : 1)
+            ) { editing in
+                isDragging = editing
+                if editing {
+                    // User started dragging - update display to match
+                    displayTime = sliderValue
+                } else {
+                    // User finished - seek to position
+                    player.seek(to: sliderValue)
+                }
+            }
+            .tint(.white)
+            .disabled(player.duration == 0)
+            .onChange(of: sliderValue) { newValue in
+                if isDragging {
+                    displayTime = newValue
+                }
+            }
+            
+            Text("-" + formatTime(max(0, player.duration - displayTime)))
+                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.8))
+                .frame(width: 45, alignment: .trailing)
         }
-        .onReceive(timer) { _ in if !isDragging && player.isPlaying { sliderValue = player.currentTime } }
-        .onAppear { sliderValue = player.currentTime }
+        .onReceive(timer) { _ in
+            guard !isDragging && player.isPlaying else { return }
+            let newTime = player.currentTime
+            // Only update if changed significantly (reduces redraws)
+            if abs(newTime - displayTime) > 0.4 {
+                displayTime = newTime
+                sliderValue = newTime
+            }
+        }
+        .onAppear {
+            sliderValue = player.currentTime
+            displayTime = player.currentTime
+        }
+        .onChange(of: player.currentTrack?.id) { _ in
+            // Reset when track changes
+            sliderValue = 0
+            displayTime = 0
+        }
     }
+    
     private func formatTime(_ time: Double) -> String {
         guard !time.isNaN && !time.isInfinite && time >= 0 else { return "00:00" }
         let totalSeconds = Int(time)
@@ -544,17 +593,12 @@ struct SeekBarView: View {
     }
 }
 
-extension View {
-    func glassPanel() -> some View {
-        self.background(.ultraThinMaterial)
-            .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous).stroke(.white.opacity(0.15), lineWidth: 1))
-            .shadow(color: .black.opacity(0.2), radius: 20, x: 0, y: 10)
-    }
-}
+// MARK: - BorderlessButtonStyle (kept for compatibility)
 
 struct BorderlessButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View { configuration.label.opacity(configuration.isPressed ? 0.7 : 1.0) }
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label.opacity(configuration.isPressed ? 0.7 : 1.0)
+    }
 }
 
 #Preview { ContentView() }

@@ -1,8 +1,9 @@
 //
 //  QueueView.swift
-//  2 Music 2 Furious - MILESTONE 7.3
+//  2 Music 2 Furious - MILESTONE 11
 //
-//  Queue management with separate Clear and Shuffle buttons
+//  Queue management with Clear and Shuffle buttons
+//  Uses SharedComponents for consistency
 //
 
 import SwiftUI
@@ -14,56 +15,66 @@ struct QueueView: View {
     
     var body: some View {
         NavigationView {
-            List {
-                if player.queue.isEmpty {
-                    Text("Queue is empty")
-                        .foregroundColor(.gray)
-                        .frame(maxWidth: .infinity, alignment: .center)
-                        .listRowBackground(Color.clear)
-                } else {
-                    ForEach(Array(player.queue.enumerated()), id: \.element.id) { index, track in
-                        QueueRow(
-                            track: track,
-                            index: index,
-                            isCurrentTrack: index == player.currentIndex,
-                            onTap: {
-                                player.playFromQueue(at: index)
-                                dismiss()
-                            }
+            ZStack {
+                GlassBackgroundView()
+                
+                List {
+                    if player.queue.isEmpty {
+                        GlassEmptyStateView(
+                            icon: "list.bullet",
+                            title: "Queue is empty",
+                            subtitle: "Add tracks from your library"
                         )
-                    }
-                    .onMove { from, to in
-                        player.queue.move(fromOffsets: from, toOffset: to)
-                        if let fromIndex = from.first {
-                            if fromIndex == player.currentIndex {
-                                player.currentIndex = to > fromIndex ? to - 1 : to
-                            } else if fromIndex < player.currentIndex && to > player.currentIndex {
-                                player.currentIndex -= 1
-                            } else if fromIndex > player.currentIndex && to <= player.currentIndex {
-                                player.currentIndex += 1
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                        .frame(height: 300)
+                    } else {
+                        ForEach(Array(player.queue.enumerated()), id: \.element.id) { index, track in
+                            QueueRow(
+                                track: track,
+                                index: index,
+                                isCurrentTrack: index == player.currentIndex,
+                                onTap: {
+                                    player.playFromQueue(at: index)
+                                    dismiss()
+                                }
+                            )
+                            .glassListRow()
+                        }
+                        .onMove { from, to in
+                            player.queue.move(fromOffsets: from, toOffset: to)
+                            if let fromIndex = from.first {
+                                if fromIndex == player.currentIndex {
+                                    player.currentIndex = to > fromIndex ? to - 1 : to
+                                } else if fromIndex < player.currentIndex && to > player.currentIndex {
+                                    player.currentIndex -= 1
+                                } else if fromIndex > player.currentIndex && to <= player.currentIndex {
+                                    player.currentIndex += 1
+                                }
                             }
                         }
-                    }
-                    .onDelete { offsets in
-                        for offset in offsets {
-                            if offset < player.currentIndex {
-                                player.currentIndex -= 1
-                            } else if offset == player.currentIndex {
-                                player.pause()
+                        .onDelete { offsets in
+                            for offset in offsets {
+                                if offset < player.currentIndex {
+                                    player.currentIndex -= 1
+                                } else if offset == player.currentIndex {
+                                    player.pause()
+                                }
                             }
-                        }
-                        player.queue.remove(atOffsets: offsets)
-                        
-                        if player.queue.isEmpty {
-                            player.currentTrack = nil
-                            player.currentIndex = 0
-                        } else if player.currentIndex >= player.queue.count {
-                            player.currentIndex = player.queue.count - 1
+                            player.queue.remove(atOffsets: offsets)
+                            
+                            if player.queue.isEmpty {
+                                player.currentTrack = nil
+                                player.currentIndex = 0
+                            } else if player.currentIndex >= player.queue.count {
+                                player.currentIndex = player.queue.count - 1
+                            }
                         }
                     }
                 }
+                .listStyle(.plain)
+                .scrollContentBackground(.hidden)
             }
-            .listStyle(.plain)
             .navigationTitle(title)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
@@ -132,7 +143,9 @@ struct QueueRow: View {
                         .foregroundColor(.blue)
                 }
             }
-            .padding(.vertical, 6)
+            .padding(.vertical, 8)
+            .padding(.horizontal, 12)
+            .glassCard()
             .contentShape(Rectangle())
         }
         .buttonStyle(PlainButtonStyle())

@@ -1,15 +1,15 @@
 //
 //  LibriVoxSearchView.swift
-//  2 Music 2 Furious - MILESTONE 8.8
+//  2 Music 2 Furious - MILESTONE 11
 //
 //  Search, browse, and download LibriVox audiobooks
-//  Updates: Header edge-to-edge, Fixed Ghost Download Logic via BookID
+//  Uses SharedComponents for consistency
 //
 
 import SwiftUI
 import Combine
 
-// MARK: - LibriVox Models (Partial - Chapter/Author in BookManager)
+// MARK: - LibriVox Models
 
 struct LibriVoxBook: Identifiable, Codable, Equatable {
     let id: String
@@ -157,76 +157,123 @@ struct LibriVoxSearchView: View {
     @ObservedObject var downloadManager = LibriVoxDownloadManager.shared
     
     let dismiss: () -> Void
-    @State private var searchText = ""; @State private var selectedTab: LibriVoxTab = .popular
-    @State private var selectedBook: LibriVoxBook?; @State private var showingToast = false; @State private var toastMessage = ""
+    @State private var searchText = ""
+    @State private var selectedTab: LibriVoxTab = .popular
+    @State private var selectedBook: LibriVoxBook?
+    @State private var showingToast = false
+    @State private var toastMessage = ""
+    
     enum LibriVoxTab: String, CaseIterable { case popular = "Popular", recent = "Recent", search = "Search" }
     
     var body: some View {
         NavigationView {
             ZStack {
-                LinearGradient(colors: [Color.blue.opacity(0.1), Color.purple.opacity(0.1)], startPoint: .topLeading, endPoint: .bottomTrailing).ignoresSafeArea()
+                GlassBackgroundView()
+                
                 VStack(spacing: 0) {
-                    HStack {
-                        Image(systemName: "magnifyingglass").foregroundColor(.secondary)
-                        TextField("Search audiobooks...", text: $searchText, onCommit: { selectedTab = .search; api.search(query: searchText) })
-                        if !searchText.isEmpty { Button(action: { searchText = "" }) { Image(systemName: "xmark.circle.fill").foregroundColor(.secondary) } }
-                    }.padding(10).background(.ultraThinMaterial).clipShape(RoundedRectangle(cornerRadius: 12)).padding()
-                    Picker("Tab", selection: $selectedTab) { ForEach(LibriVoxTab.allCases, id: \.self) { Text($0.rawValue).tag($0) } }
-                        .pickerStyle(SegmentedPickerStyle()).padding(.horizontal).padding(.bottom, 16)
-                        .onChange(of: selectedTab) { if $0 == .popular { api.loadPopular() } else if $0 == .recent { api.loadRecent() } }
+                    // Search Bar
+                    GlassSearchBar(
+                        text: $searchText,
+                        placeholder: "Search audiobooks...",
+                        onCommit: {
+                            selectedTab = .search
+                            api.search(query: searchText)
+                        }
+                    )
+                    .padding()
+                    
+                    // Tab Picker
+                    GlassSegmentedFilter(
+                        selection: $selectedTab,
+                        options: LibriVoxTab.allCases.map { ($0, $0.rawValue) },
+                        color: .royalPurple,
+                        onChange: { tab in
+                            if tab == .popular { api.loadPopular() }
+                            else if tab == .recent { api.loadRecent() }
+                        }
+                    )
+                    .padding(.horizontal)
+                    .padding(.bottom, 16)
+                    
+                    // Content
                     ScrollView {
                         LazyVStack(spacing: 16) {
                             if selectedTab == .search && api.displayBooks.isEmpty && !api.isSearching {
-                                if searchText.isEmpty { emptyView(icon: "magnifyingglass", text: "Search") } else { emptyView(icon: "book.closed", text: "No results") }
-                            } else { bookListView(books: api.displayBooks, isLoading: api.isSearching) }
-                        }.padding(.horizontal).padding(.bottom, 20)
+                                if searchText.isEmpty {
+                                    emptyView(icon: "magnifyingglass", text: "Search for audiobooks")
+                                } else {
+                                    emptyView(icon: "book.closed", text: "No results found")
+                                }
+                            } else {
+                                bookListView(books: api.displayBooks, isLoading: api.isSearching)
+                            }
+                        }
+                        .padding(.horizontal)
+                        .padding(.bottom, 20)
                     }
                 }
-                if showingToast { VStack { Spacer(); LibriVoxToastView(message: toastMessage).padding(.bottom, 20) }.transition(.move(edge: .bottom).combined(with: .opacity)).animation(.spring(), value: showingToast).zIndex(100) }
+                
+                if showingToast {
+                    VStack { Spacer(); GlassToastView(message: toastMessage, icon: "arrow.down.circle.fill", iconColor: .royalPurple).padding(.bottom, 20) }
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                        .animation(.spring(), value: showingToast)
+                        .zIndex(100)
+                }
             }
-            .navigationTitle("LibriVox").navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button(action: { dismiss() }) { Image(systemName: "xmark").font(.system(size: 16, weight: .semibold)).foregroundColor(.primary) } } }
+            .navigationTitle("LibriVox")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    GlassCloseButton(action: dismiss)
+                }
+            }
             .sheet(item: $selectedBook) { book in
                 LibriVoxBookDetailView(book: book, api: api, bookManager: bookManager, showToast: showToast, dismiss: { selectedBook = nil })
             }
             .onAppear { if api.displayBooks.isEmpty { api.loadPopular() } }
         }
+        .accentColor(.royalPurple)
     }
     
     private func bookListView(books: [LibriVoxBook], isLoading: Bool) -> some View {
         Group {
-            if isLoading && books.isEmpty { VStack(spacing: 16) { ProgressView(); Text("Loading...").foregroundColor(.secondary) }.padding(.top, 50) } else {
+            if isLoading && books.isEmpty {
+                VStack(spacing: 16) { ProgressView(); Text("Loading...").foregroundColor(.secondary) }.padding(.top, 50)
+            } else {
                 ForEach(books) { book in
-                    LibriVoxBookRow(book: book).onTapGesture { selectedBook = book; api.loadBookDetails(bookId: book.id) }
-                        .onAppear { if book.id == books.last?.id { api.loadNextPage() } }
+                    // Using Shared Component
+                    GlassMediaListRow(
+                        title: book.title,
+                        subtitle: book.author,
+                        artworkURL: book.coverArtUrl,
+                        artworkIcon: "book.fill",
+                        artworkColor: .orange,
+                        details: "\(book.chapters.count) ch • \(book.totalTime)"
+                    )
+                    .onTapGesture { selectedBook = book; api.loadBookDetails(bookId: book.id) }
+                    .onAppear { if book.id == books.last?.id { api.loadNextPage() } }
                 }
                 if api.isLoadingMore { HStack { Spacer(); ProgressView(); Spacer() }.padding() }
             }
         }
     }
     
-    private func emptyView(icon: String, text: String) -> some View { VStack(spacing: 16) { Image(systemName: icon).font(.system(size: 40)).foregroundColor(.secondary); Text(text).foregroundColor(.secondary) }.padding(.top, 50) }
-    private func showToast(_ message: String) { toastMessage = message; withAnimation { showingToast = true }; DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { withAnimation { showingToast = false } } }
-}
-
-struct LibriVoxBookRow: View {
-    let book: LibriVoxBook
-    var body: some View {
-        HStack(spacing: 16) {
-            ZStack {
-                if let url = book.coverArtUrl { AsyncImage(url: url) { phase in if let image = phase.image { image.resizable().aspectRatio(contentMode: .fill) } else { Color.orange.opacity(0.1) } } }
-                else { RoundedRectangle(cornerRadius: 12).fill(Color.orange.opacity(0.1)); Image(systemName: "book.fill").font(.system(size: 24)).foregroundColor(.orange) }
-            }.frame(width: 56, height: 56).cornerRadius(12).clipped()
-            VStack(alignment: .leading, spacing: 4) {
-                Text(book.title).font(.system(size: 16, weight: .semibold)).foregroundColor(.primary).lineLimit(2)
-                Text(book.author).font(.system(size: 14)).foregroundColor(.secondary).lineLimit(1)
-                HStack(spacing: 12) { Label("\(book.chapters.count) ch", systemImage: "list.bullet"); Label(book.totalTime, systemImage: "clock") }.font(.caption).foregroundColor(.secondary)
-            }
-            Spacer(); Image(systemName: "chevron.right").foregroundColor(.secondary.opacity(0.5)).font(.system(size: 14, weight: .semibold))
+    private func emptyView(icon: String, text: String) -> some View {
+        VStack(spacing: 16) {
+            Image(systemName: icon).font(.system(size: 40)).foregroundColor(.secondary)
+            Text(text).foregroundColor(.secondary)
         }
-        .padding(16).background(.ultraThinMaterial).cornerRadius(20).overlay(RoundedRectangle(cornerRadius: 20).stroke(Color.white.opacity(0.2), lineWidth: 1)).shadow(color: Color.black.opacity(0.05), radius: 10, x: 0, y: 5)
+        .padding(.top, 50)
+    }
+    
+    private func showToast(_ message: String) {
+        toastMessage = message
+        withAnimation { showingToast = true }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { withAnimation { showingToast = false } }
     }
 }
+
+// MARK: - LibriVox Book Detail View
 
 struct LibriVoxBookDetailView: View {
     let book: LibriVoxBook
@@ -250,109 +297,81 @@ struct LibriVoxBookDetailView: View {
     var body: some View {
         NavigationView {
             ZStack {
-                LinearGradient(colors: [Color.blue.opacity(0.1), Color.purple.opacity(0.1)], startPoint: .topLeading, endPoint: .bottomTrailing).ignoresSafeArea()
+                GlassBackgroundView()
+                
                 ScrollView {
                     VStack(alignment: .leading, spacing: 20) {
-                        // Edge-to-Edge Header
-                        HStack(alignment: .top, spacing: 16) {
-                            ZStack {
-                                if let url = displayBook.coverArtUrl { AsyncImage(url: url) { phase in if let image = phase.image { image.resizable().aspectRatio(contentMode: .fill) } else { Color.orange.opacity(0.1); ProgressView() } } }
-                                else { Color.orange.opacity(0.1); Image(systemName: "book.fill").font(.system(size: 40)).foregroundColor(.orange) }
-                            }.frame(width: 100, height: 100).cornerRadius(20).shadow(radius: 5)
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text(displayBook.title).font(.title3.weight(.bold)).fixedSize(horizontal: false, vertical: true)
-                                Text(displayBook.author).font(.subheadline).foregroundColor(.secondary)
-                                HStack(spacing: 12) { Label("\(displayBook.chapters.count) chapters", systemImage: "list.bullet"); Label(displayBook.totalTime, systemImage: "clock") }.font(.caption).foregroundColor(.secondary)
-                            }
-                            Spacer()
-                        }
-                        .padding()
-                        .frame(maxWidth: .infinity) // FORCE FULL WIDTH
-                        .background(.ultraThinMaterial)
-                        // .cornerRadius(24) // REMOVE ROUNDED CORNERS FOR FULL EDGE-TO-EDGE LOOK OR KEEP IF DESIRED. Keeping generic structure but removing side padding constraints
+                        // Header
+                        MediaDetailHeader(
+                            title: displayBook.title,
+                            subtitle: displayBook.author,
+                            tertiaryText: "\(displayBook.chapters.count) chapters • \(displayBook.totalTime)",
+                            artworkURL: displayBook.coverArtUrl,
+                            artworkIcon: "book.fill",
+                            artworkColor: .orange // LibriVox Orange accent for artwork
+                        )
+                        .padding(.horizontal)
                         
-                        Button(action: downloadAll) {
-                            HStack {
-                                if isDownloadingAll { ProgressView().progressViewStyle(CircularProgressViewStyle(tint: .white)); Text("Downloading...") }
-                                else { Image(systemName: "arrow.down.circle.fill"); Text("Download All Chapters") }
-                            }.font(.system(size: 16, weight: .semibold)).foregroundColor(.white).frame(maxWidth: .infinity).padding(.vertical, 16).background(isDownloadingAll ? Color.gray : Color.blue).cornerRadius(16).shadow(color: Color.blue.opacity(0.3), radius: 10, x: 0, y: 5)
-                        }.disabled(isDownloadingAll || displayBook.chapters.isEmpty).padding(.horizontal)
+                        // Download All Button
+                        GlassActionButton(
+                            title: "Download All Chapters",
+                            icon: "arrow.down.circle.fill",
+                            isLoading: isDownloadingAll,
+                            loadingText: "Downloading...",
+                            color: .deepResumePurple, // UPDATED: Matches Resume Button in Books (Darker)
+                            isDisabled: displayBook.chapters.isEmpty,
+                            action: downloadAll
+                        )
+                        .padding(.horizontal)
                         
+                        // Description
                         if !displayBook.description.isEmpty {
-                            DescriptionView(text: displayBook.description.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression))
-                                .padding(.horizontal)
+                            ExpandableDescriptionView(
+                                text: displayBook.description.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression),
+                                color: .royalPurple
+                            )
+                            .padding(.horizontal)
                         }
                         
+                        // Chapters
                         VStack(alignment: .leading, spacing: 12) {
-                            if api.isLoadingChapters { HStack { Spacer(); ProgressView("Loading chapters..."); Spacer() }.padding() }
-                            else {
+                            if api.isLoadingChapters {
+                                HStack { Spacer(); ProgressView("Loading chapters..."); Spacer() }.padding()
+                            } else {
                                 LazyVStack(spacing: 8) {
                                     ForEach(Array(displayBook.chapters.enumerated()), id: \.element.id) { index, chapter in
-                                        ChapterRow(chapter: chapter, index: index, bookId: displayBook.id, bookTitle: displayBook.title, author: displayBook.author, coverUrl: displayBook.coverArtUrl, description: displayBook.description, bookManager: bookManager, showToast: showToast, fullChapterList: displayBook.chapters)
+                                        // Using Shared Component
+                                        GlassDownloadRow(
+                                            index: index + 1,
+                                            title: chapter.title,
+                                            subtitle: chapter.formattedDuration,
+                                            isDownloaded: downloadManager.isCompleted(bookId: displayBook.id, chapterId: chapter.id),
+                                            isDownloading: downloadManager.isDownloading(bookId: displayBook.id, chapterId: chapter.id),
+                                            color: .royalPurple,
+                                            onDownload: {
+                                                downloadManager.downloadSingleChapter(chapter: chapter, bookId: displayBook.id, bookTitle: displayBook.title, author: displayBook.author, coverUrl: displayBook.coverArtUrl, description: displayBook.description, index: index, bookManager: bookManager, fullChapterList: displayBook.chapters)
+                                                showToast("Downloading \(chapter.title)...")
+                                            }
+                                        )
                                     }
-                                }.padding(.horizontal)
+                                }
+                                .padding(.horizontal)
                             }
                         }
+                        
                         Spacer(minLength: 50)
-                    }.padding(.top)
+                    }
+                    .padding(.top)
                 }
             }
-            .navigationTitle("Details").navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button(action: { dismiss() }) { Image(systemName: "xmark").font(.system(size: 16, weight: .semibold)).foregroundColor(.primary) } } }
-        }
-    }
-}
-
-struct DescriptionView: View {
-    let text: String; @State private var isExpanded = false
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Description").font(.headline)
-            Text(text).font(.system(size: 15)).foregroundColor(.secondary).lineLimit(isExpanded ? nil : 4).animation(.spring(), value: isExpanded)
-            Button(action: { withAnimation { isExpanded.toggle() } }) { Text(isExpanded ? "Show Less" : "Show More").font(.caption.weight(.bold)).foregroundColor(.blue) }
-        }
-        .padding()
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.ultraThinMaterial).cornerRadius(16).onTapGesture { withAnimation { isExpanded.toggle() } }
-    }
-}
-
-struct ChapterRow: View {
-    let chapter: LibriVoxChapter; let index: Int
-    let bookId: String; let bookTitle: String; let author: String; let coverUrl: URL?; let description: String?
-    @ObservedObject var downloadManager = LibriVoxDownloadManager.shared
-    @ObservedObject var bookManager: BookManager
-    let showToast: (String) -> Void
-    let fullChapterList: [LibriVoxChapter]
-    
-    // FIX: Unique ID Check
-    var isDownloading: Bool { downloadManager.isDownloading(bookId: bookId, chapterId: chapter.id) }
-    var isCompleted: Bool { downloadManager.isCompleted(bookId: bookId, chapterId: chapter.id) }
-    
-    var body: some View {
-        HStack(spacing: 12) {
-            Text("\(index + 1)").font(.system(size: 14, weight: .bold)).foregroundColor(.secondary).frame(width: 30)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(chapter.title).font(.system(size: 15)).foregroundColor(.primary).lineLimit(1)
-                Text(chapter.formattedDuration).font(.caption).foregroundColor(.secondary)
+            .navigationTitle("Details")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    GlassCloseButton(action: dismiss)
+                }
             }
-            Spacer()
-            if isCompleted { Image(systemName: "checkmark.circle.fill").foregroundColor(.green).font(.system(size: 20)) }
-            else if isDownloading { ProgressView().scaleEffect(0.8) }
-            else {
-                Button(action: {
-                    downloadManager.downloadSingleChapter(chapter: chapter, bookId: bookId, bookTitle: bookTitle, author: author, coverUrl: coverUrl, description: description, index: index, bookManager: bookManager, fullChapterList: fullChapterList)
-                    showToast("Downloading \(chapter.title)...")
-                }) { Image(systemName: "arrow.down.circle").foregroundColor(.blue).font(.system(size: 22)) }.buttonStyle(BorderlessButtonStyle())
-            }
-        }.padding(12).background(.ultraThinMaterial).cornerRadius(12).overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.2), lineWidth: 1))
-    }
-}
-
-struct LibriVoxToastView: View {
-    let message: String
-    var body: some View {
-        HStack(spacing: 10) { Image(systemName: "arrow.down.circle.fill").foregroundColor(.blue); Text(message).font(.subheadline.weight(.medium)) }
-            .padding(.horizontal, 20).padding(.vertical, 12).background(.thinMaterial).clipShape(Capsule()).shadow(color: .black.opacity(0.15), radius: 10, x: 0, y: 5)
+        }
+        .accentColor(.royalPurple)
     }
 }

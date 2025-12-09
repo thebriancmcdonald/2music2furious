@@ -92,7 +92,7 @@ class MusicLibraryManager: ObservableObject {
     
     func createTrack(from item: MPMediaItem) -> Track? {
         guard let assetURL = item.assetURL else {
-            print("❌ No asset URL for: \(item.title ?? "Unknown")")
+            print("âŒ No asset URL for: \(item.title ?? "Unknown")")
             return nil
         }
         

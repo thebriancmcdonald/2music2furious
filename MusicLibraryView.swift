@@ -1,12 +1,11 @@
 //
 //  MusicLibraryView.swift
-//  2 Music 2 Furious - MILESTONE 7.3
+//  2 Music 2 Furious - MILESTONE 11
 //
 //  Features:
 //  - Filter tabs: Playlists, Artists, Albums, Songs, Uploads
-//  - Drill-down navigation for Albums/Artists/Playlists (New!)
-//  - Uploads Tab restored
-//  - Style: Apple Glass
+//  - Drill-down navigation for Albums/Artists/Playlists
+//  - Uses SharedComponents for consistency
 //
 
 import SwiftUI
@@ -37,13 +36,7 @@ struct MusicLibraryView: View {
     var body: some View {
         NavigationView {
             ZStack {
-                // 1. Background Gradient
-                LinearGradient(
-                    colors: [Color.blue.opacity(0.1), Color.purple.opacity(0.1)],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
-                .ignoresSafeArea()
+                GlassBackgroundView()
                 
                 VStack(spacing: 0) {
                     if library.authorizationStatus != .authorized && selectedTab != .uploads {
@@ -61,11 +54,7 @@ struct MusicLibraryView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button(action: { dismiss() }) {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundColor(.primary)
-                    }
+                    GlassCloseButton(action: dismiss)
                 }
             }
             .fileImporter(
@@ -76,6 +65,7 @@ struct MusicLibraryView: View {
                 handleFileUpload(result: result)
             }
         }
+        .accentColor(.royalPurple) // Global tint for this view
     }
     
     // MARK: - Subviews
@@ -104,7 +94,12 @@ struct MusicLibraryView: View {
             tabsView
             
             if selectedTab != .uploads {
-                searchBarView
+                GlassSearchBar(
+                    text: $searchText,
+                    placeholder: "Search music..."
+                )
+                .padding(.horizontal)
+                .padding(.bottom, 8)
             }
             
             contentSwitcher
@@ -138,29 +133,10 @@ struct MusicLibraryView: View {
     @ViewBuilder
     private func tabBackground(for tab: LibraryTab) -> some View {
         if selectedTab == tab {
-            Color.blue
+            Color.royalPurple // UPDATED: Selected tab is now Royal Purple
         } else {
             Rectangle().fill(.ultraThinMaterial)
         }
-    }
-    
-    private var searchBarView: some View {
-        HStack {
-            Image(systemName: "magnifyingglass")
-                .foregroundColor(.secondary)
-            TextField("Search music...", text: $searchText)
-            if !searchText.isEmpty {
-                Button(action: { searchText = "" }) {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundColor(.secondary)
-                }
-            }
-        }
-        .padding(10)
-        .background(.ultraThinMaterial)
-        .cornerRadius(12)
-        .padding(.horizontal)
-        .padding(.bottom, 8)
     }
     
     private var contentSwitcher: some View {
@@ -219,7 +195,7 @@ struct MusicLibraryView: View {
             if showingToast {
                 VStack {
                     Spacer()
-                    ToastView(message: toastMessage)
+                    GlassToastView(message: toastMessage)
                         .padding(.bottom, 50)
                 }
                 .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -399,7 +375,7 @@ struct MusicLibraryView: View {
     }
 }
 
-// MARK: - GENERIC COLLECTION DETAIL VIEW (NEW)
+// MARK: - GENERIC COLLECTION DETAIL VIEW
 
 struct MusicCollectionDetailView: View {
     let title: String
@@ -413,13 +389,7 @@ struct MusicCollectionDetailView: View {
     
     var body: some View {
         ZStack {
-            // Background
-            LinearGradient(
-                colors: [Color.blue.opacity(0.1), Color.purple.opacity(0.1)],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            .ignoresSafeArea()
+            GlassBackgroundView()
             
             ScrollView {
                 VStack(spacing: 20) {
@@ -452,29 +422,23 @@ struct MusicCollectionDetailView: View {
                         }
                         
                         // Play All Button
-                        Button(action: {
-                            onPlayAll()
-                            dismiss()
-                        }) {
-                            HStack {
-                                Image(systemName: "play.fill")
-                                Text("Play All")
+                        GlassActionButton(
+                            title: "Play All",
+                            icon: "play.fill",
+                            color: .deepResumePurple, // UPDATED: Matches Resume Button style
+                            action: {
+                                onPlayAll()
+                                dismiss()
                             }
-                            .font(.headline)
-                            .foregroundColor(.white)
-                            .padding(.vertical, 12)
-                            .padding(.horizontal, 40)
-                            .background(Color.blue)
-                            .cornerRadius(25)
-                            .shadow(color: Color.blue.opacity(0.3), radius: 5, x: 0, y: 5)
-                        }
+                        )
+                        .padding(.horizontal, 40)
                         .padding(.top, 4)
                     }
                     .padding(.top, 20)
                     
                     // Song List
                     LazyVStack(spacing: 8) {
-                        ForEach(items, id: \.persistentID) { item in
+                        ForEach(Array(items.enumerated()), id: \.element.persistentID) { index, item in
                             Button(action: {
                                 if let track = library.createTrack(from: item) {
                                     musicPlayer.playNow(track)
@@ -482,7 +446,7 @@ struct MusicCollectionDetailView: View {
                                 }
                             }) {
                                 HStack(spacing: 12) {
-                                    Text("\(items.firstIndex(of: item)! + 1)")
+                                    Text("\(index + 1)")
                                         .font(.caption.weight(.bold))
                                         .foregroundColor(.secondary)
                                         .frame(width: 25)
@@ -500,11 +464,10 @@ struct MusicCollectionDetailView: View {
                                     Spacer()
                                     Image(systemName: "play.circle")
                                         .font(.system(size: 20))
-                                        .foregroundColor(.blue.opacity(0.6))
+                                        .foregroundColor(.royalPurple.opacity(0.6)) // UPDATED: Purple play icon
                                 }
                                 .padding(12)
-                                .background(.ultraThinMaterial)
-                                .cornerRadius(12)
+                                .glassCard()
                             }
                             .buttonStyle(PlainButtonStyle())
                         }
@@ -537,9 +500,7 @@ struct SongsListView: View {
         } else {
             List(songs, id: \.persistentID) { item in
                 GlassSongRow(item: item, onPlay: { onPlay(item) }, onAddToQueue: { onQueue(item) })
-                    .listRowBackground(Color.clear)
-                    .listRowSeparator(.hidden)
-                    .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+                    .glassListRow()
             }
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
@@ -562,7 +523,6 @@ struct AlbumsListView: View {
             Spacer()
         } else {
             List(albums, id: \.persistentID) { album in
-                // NAVIGATION WRAPPER
                 ZStack {
                     NavigationLink(destination: MusicCollectionDetailView(
                         title: album.representativeItem?.albumTitle ?? "Unknown Album",
@@ -584,9 +544,7 @@ struct AlbumsListView: View {
                         onQueue: { onQueueAlbum(album) }
                     )
                 }
-                .listRowBackground(Color.clear)
-                .listRowSeparator(.hidden)
-                .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+                .glassListRow()
             }
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
@@ -630,9 +588,7 @@ struct ArtistsListView: View {
                         onQueue: { onQueueArtist(artist) }
                     )
                 }
-                .listRowBackground(Color.clear)
-                .listRowSeparator(.hidden)
-                .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+                .glassListRow()
             }
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
@@ -676,9 +632,7 @@ struct PlaylistsListView: View {
                         onQueue: { onQueuePlaylist(playlist) }
                     )
                 }
-                .listRowBackground(Color.clear)
-                .listRowSeparator(.hidden)
-                .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+                .glassListRow()
             }
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
@@ -686,7 +640,7 @@ struct PlaylistsListView: View {
     }
 }
 
-// MARK: - Uploads List View (RESTORED)
+// MARK: - Uploads List View
 
 struct UploadsListView: View {
     let uploads: [Track]
@@ -708,14 +662,9 @@ struct UploadsListView: View {
                         .font(.system(size: 14))
                         .foregroundColor(.secondary)
                 }
-                .foregroundColor(.blue)
+                .foregroundColor(.royalPurple) // UPDATED: Royal Purple
                 .padding()
-                .background(.ultraThinMaterial)
-                .cornerRadius(12)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 12)
-                        .stroke(Color.white.opacity(0.2), lineWidth: 1)
-                )
+                .glassCard()
             }
             .padding(.horizontal)
             .padding(.top, 8)
@@ -733,9 +682,7 @@ struct UploadsListView: View {
                             onPlay: { onPlay(track) },
                             onQueue: { onQueue(track) }
                         )
-                        .listRowBackground(Color.clear)
-                        .listRowSeparator(.hidden)
-                        .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+                        .glassListRow()
                         .swipeActions(edge: .trailing) {
                             Button(role: .destructive) {
                                 onDelete(track)
@@ -772,14 +719,11 @@ struct GlassSongRow: View {
                 Text(item.artist ?? "Unknown").font(.caption).foregroundColor(.secondary).lineLimit(1)
             }
             Spacer()
-            Button(action: onAddToQueue) {
-                Image(systemName: "plus").font(.system(size: 16, weight: .bold)).foregroundColor(.secondary).padding(8).background(.ultraThinMaterial).clipShape(Circle())
-            }
-            .buttonStyle(BorderlessButtonStyle())
+            
+            GlassPlusButton(action: onAddToQueue)
         }
         .padding(12)
-        .background(.ultraThinMaterial)
-        .cornerRadius(12)
+        .glassCard()
         .contentShape(Rectangle())
         .onTapGesture { onPlay() }
     }
@@ -803,14 +747,11 @@ struct GlassAlbumRow: View {
                 Text(album.representativeItem?.albumArtist ?? "Unknown").font(.caption).foregroundColor(.secondary).lineLimit(1)
             }
             Spacer()
-            Button(action: onQueue) {
-                Image(systemName: "plus").font(.system(size: 16, weight: .bold)).foregroundColor(.secondary).padding(8).background(.ultraThinMaterial).clipShape(Circle())
-            }
-            .buttonStyle(BorderlessButtonStyle())
+            
+            GlassPlusButton(action: onQueue)
         }
         .padding(12)
-        .background(.ultraThinMaterial)
-        .cornerRadius(12)
+        .glassCard()
     }
 }
 
@@ -832,14 +773,11 @@ struct GlassArtistRow: View {
                 Text("\(artist.count) songs").font(.caption).foregroundColor(.secondary)
             }
             Spacer()
-            Button(action: onQueue) {
-                Image(systemName: "plus").font(.system(size: 16, weight: .bold)).foregroundColor(.secondary).padding(8).background(.ultraThinMaterial).clipShape(Circle())
-            }
-            .buttonStyle(BorderlessButtonStyle())
+            
+            GlassPlusButton(action: onQueue)
         }
         .padding(12)
-        .background(.ultraThinMaterial)
-        .cornerRadius(12)
+        .glassCard()
     }
 }
 
@@ -861,14 +799,11 @@ struct GlassPlaylistRow: View {
                 Text("\(playlist.count) songs").font(.caption).foregroundColor(.secondary)
             }
             Spacer()
-            Button(action: onQueue) {
-                Image(systemName: "plus").font(.system(size: 16, weight: .bold)).foregroundColor(.secondary).padding(8).background(.ultraThinMaterial).clipShape(Circle())
-            }
-            .buttonStyle(BorderlessButtonStyle())
+            
+            GlassPlusButton(action: onQueue)
         }
         .padding(12)
-        .background(.ultraThinMaterial)
-        .cornerRadius(12)
+        .glassCard()
     }
 }
 
@@ -879,32 +814,20 @@ struct GlassUploadedTrackRow: View {
     
     var body: some View {
         HStack(spacing: 12) {
-            RoundedRectangle(cornerRadius: 8).fill(Color.blue.opacity(0.1)).frame(width: 44, height: 44)
-                .overlay(Image(systemName: "music.note").foregroundColor(.blue))
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color.royalPurple.opacity(0.1)) // UPDATED: Purple background
+                .frame(width: 44, height: 44)
+                .overlay(Image(systemName: "music.note").foregroundColor(.royalPurple)) // UPDATED: Purple icon
             VStack(alignment: .leading, spacing: 2) {
                 Text(track.title).font(.system(size: 15, weight: .medium)).foregroundColor(.primary).lineLimit(1)
                 Text("Uploaded").font(.caption).foregroundColor(.secondary)
             }
             Spacer()
-            Button(action: onQueue) {
-                Image(systemName: "plus").font(.system(size: 16, weight: .bold)).foregroundColor(.secondary).padding(8).background(.ultraThinMaterial).clipShape(Circle())
-            }
-            .buttonStyle(BorderlessButtonStyle())
+            
+            GlassPlusButton(action: onQueue)
         }
         .padding(12)
-        .background(.ultraThinMaterial)
-        .cornerRadius(12)
+        .glassCard()
         .onTapGesture { onPlay() }
-    }
-}
-
-struct ToastView: View {
-    let message: String
-    var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "checkmark.circle.fill").foregroundColor(.green)
-            Text(message).font(.subheadline.weight(.medium)).foregroundColor(.white)
-        }
-        .padding(.horizontal, 20).padding(.vertical, 12).background(.thinMaterial).clipShape(Capsule()).shadow(color: .black.opacity(0.15), radius: 10, x: 0, y: 5)
     }
 }

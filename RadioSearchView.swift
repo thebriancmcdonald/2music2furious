@@ -1,10 +1,8 @@
 //
 //  RadioSearchView.swift
-//  2 Music 2 Furious - MILESTONE 7.8
+//  2 Music 2 Furious - MILESTONE 11
 //
-//  Layout: [X] ... [Favorites] [Search] [Filter Pills] [Results]
-//  Style: Apple Glass "Invisible UI" + Infinite Scroll
-//  Updates: Swapped Headphones icon for Person icon
+//  Radio search with filters - Uses SharedComponents for consistency
 //
 
 import SwiftUI
@@ -24,7 +22,6 @@ struct RadioSearchView: View {
     let genres = ["Pop", "Rock", "Jazz", "Classical", "Hip Hop", "Electronic", "News", "Talk", "Country", "Indie"]
     let countries = ["USA", "UK", "Germany", "France", "Canada", "Japan", "Brazil", "Spain", "Italy"]
     
-    // Quality Options (kbps)
     let qualityOptions = [
         (96, "Standard (96k+)"),
         (128, "High (128k+)"),
@@ -35,53 +32,45 @@ struct RadioSearchView: View {
     var body: some View {
         NavigationView {
             ZStack {
-                // 1. Background Gradient
-                LinearGradient(
-                    colors: [Color.blue.opacity(0.1), Color.purple.opacity(0.1)],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
-                .ignoresSafeArea()
+                GlassBackgroundView()
                 
-                // 2. Main Scrolling Content
                 List {
                     // SECTION 1: FAVORITES
                     if !radioAPI.favoriteStations.isEmpty {
-                        favoritesSection
+                        FavoritesCarousel(
+                            title: "Favorites",
+                            items: Array(radioAPI.favoriteStations.prefix(8)),
+                            onSeeAll: { showingFavoritesFull = true }
+                        ) { station in
+                            CarouselItemView(
+                                title: station.displayName,
+                                artworkURL: URL(string: station.favicon),
+                                size: 70,
+                                fallbackIcon: "antenna.radiowaves.left.and.right",
+                                fallbackColor: .orange // Radio keeps Orange identity to distinguish from Podcasts
+                            ) {
+                                playStation(station)
+                            }
+                        }
+                        .listRowInsets(EdgeInsets(top: 20, leading: 16, bottom: 10, trailing: 16))
+                        .listRowSeparator(.hidden)
+                        .listRowBackground(Color.clear)
                     }
                     
                     // SECTION 2: SEARCH & FILTER
                     VStack(alignment: .leading, spacing: 12) {
                         // Search Bar
-                        HStack {
-                            Image(systemName: "magnifyingglass")
-                                .foregroundColor(.secondary)
-                            
-                            TextField("Search stations...", text: $searchText, onCommit: performSearch)
-                                .submitLabel(.search)
-                            
-                            if !searchText.isEmpty {
-                                Button(action: {
-                                    searchText = ""
-                                    performSearch()
-                                }) {
-                                    Image(systemName: "xmark.circle.fill")
-                                        .foregroundColor(.secondary)
-                                }
-                            }
-                        }
-                        .padding(12)
-                        .background(.ultraThinMaterial)
-                        .cornerRadius(12)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 12)
-                                .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                        GlassSearchBar(
+                            text: $searchText,
+                            placeholder: "Search stations...",
+                            onCommit: performSearch,
+                            onClear: performSearch
                         )
                         
                         // Horizontal Filter Pills
                         ScrollView(.horizontal, showsIndicators: false) {
                             HStack(spacing: 10) {
-                                // 1. Genre Pill
+                                // Genre Pill
                                 Menu {
                                     Button("All Genres", action: {
                                         selectedGenre = nil
@@ -101,7 +90,7 @@ struct RadioSearchView: View {
                                     )
                                 }
                                 
-                                // 2. Country Pill
+                                // Country Pill
                                 Menu {
                                     Button("All Countries", action: {
                                         selectedCountry = nil
@@ -121,7 +110,7 @@ struct RadioSearchView: View {
                                     )
                                 }
                                 
-                                // 3. Quality Pill
+                                // Quality Pill
                                 Menu {
                                     Button("Any Quality", action: {
                                         selectedBitrate = nil
@@ -141,7 +130,7 @@ struct RadioSearchView: View {
                                     )
                                 }
                                 
-                                // 4. Reset Button
+                                // Reset Button
                                 if selectedGenre != nil || selectedCountry != nil || selectedBitrate != nil || !searchText.isEmpty {
                                     Button(action: resetFilters) {
                                         Image(systemName: "xmark.circle.fill")
@@ -170,7 +159,6 @@ struct RadioSearchView: View {
                         .listRowSeparator(.hidden)
                         .padding(.top, 40)
                     } else if radioAPI.searchResults.isEmpty {
-                        // Show empty state / Default Load
                         HStack {
                             Spacer()
                             if searchText.isEmpty && selectedGenre == nil && selectedCountry == nil && selectedBitrate == nil {
@@ -187,15 +175,11 @@ struct RadioSearchView: View {
                         .listRowSeparator(.hidden)
                         .padding(.top, 40)
                     } else {
-                        // THE LIST LOOP
                         ForEach(radioAPI.searchResults) { station in
                             GlassStationRow(station: station, radioAPI: radioAPI)
                                 .onTapGesture { playStation(station) }
-                                .listRowBackground(Color.clear)
-                                .listRowSeparator(.hidden)
-                                .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+                                .glassListRowWide()
                                 .onAppear {
-                                    // INFINITE SCROLL TRIGGER
                                     if station.id == radioAPI.searchResults.last?.id {
                                         radioAPI.loadNextPage()
                                     }
@@ -232,14 +216,11 @@ struct RadioSearchView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button(action: { dismiss() }) {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundColor(.primary)
-                    }
+                    GlassCloseButton(action: dismiss)
                 }
             }
         }
+        .accentColor(.royalPurple) // Global purple tint
     }
     
     // MARK: - Actions
@@ -268,74 +249,6 @@ struct RadioSearchView: View {
     private func playStation(_ station: RadioStation) {
         musicPlayer.addRadioStream(name: station.displayName, streamURL: station.url)
         dismiss()
-    }
-    
-    // MARK: - Subviews
-    
-    private var favoritesSection: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack {
-                Text("Favorites")
-                    .font(.title2.weight(.bold))
-                Spacer()
-                Button(action: { showingFavoritesFull = true }) {
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 14, weight: .bold))
-                        .foregroundColor(.secondary)
-                        .padding(8)
-                        .background(.ultraThinMaterial)
-                        .clipShape(Circle())
-                }
-            }
-            .padding(.horizontal, 4)
-            
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(alignment: .top, spacing: 16) {
-                    ForEach(radioAPI.favoriteStations.prefix(8)) { station in
-                        Button(action: { playStation(station) }) {
-                            VStack(spacing: 8) {
-                                stationIcon(station, size: 70)
-                                    .shadow(radius: 4)
-                                Text(station.displayName)
-                                    .font(.system(size: 11, weight: .medium))
-                                    .foregroundColor(.primary)
-                                    .lineLimit(2)
-                                    .multilineTextAlignment(.center)
-                                    .frame(width: 70)
-                            }
-                        }
-                        .buttonStyle(BorderlessButtonStyle())
-                    }
-                }
-                .padding(.horizontal, 4)
-                .padding(.bottom, 10)
-            }
-        }
-        .listRowInsets(EdgeInsets(top: 20, leading: 16, bottom: 10, trailing: 16))
-        .listRowSeparator(.hidden)
-        .listRowBackground(Color.clear)
-    }
-    
-    @ViewBuilder
-    private func stationIcon(_ station: RadioStation, size: CGFloat) -> some View {
-        if !station.favicon.isEmpty, let url = URL(string: station.favicon) {
-            AsyncImage(url: url) { image in
-                image.resizable().scaledToFill()
-            } placeholder: {
-                radioPlaceholder(size: size)
-            }
-            .frame(width: size, height: size)
-            .cornerRadius(16)
-        } else {
-            radioPlaceholder(size: size)
-        }
-    }
-    
-    private func radioPlaceholder(size: CGFloat) -> some View {
-        RoundedRectangle(cornerRadius: 16)
-            .fill(LinearGradient(colors: [.orange.opacity(0.2), .red.opacity(0.2)], startPoint: .topLeading, endPoint: .bottomTrailing))
-            .frame(width: size, height: size)
-            .overlay(Image(systemName: "antenna.radiowaves.left.and.right").font(.system(size: size * 0.4)).foregroundColor(.orange))
     }
 }
 
@@ -371,7 +284,7 @@ struct FilterPill: View {
     @ViewBuilder
     var backgroundView: some View {
         if isActive {
-            Color.blue
+            Color.royalPurple // UPDATED: Changed from Blue to Royal Purple
         } else {
             Rectangle().fill(.ultraThinMaterial)
         }
@@ -386,15 +299,14 @@ struct GlassStationRow: View {
     
     var body: some View {
         HStack(spacing: 16) {
-            // Icon
-            if !station.favicon.isEmpty, let url = URL(string: station.favicon) {
-                AsyncImage(url: url) { image in image.resizable().scaledToFill() } placeholder: { defaultIcon }
-                    .frame(width: 50, height: 50).cornerRadius(12).shadow(radius: 2)
-            } else {
-                defaultIcon
-            }
+            MediaArtworkView(
+                url: URL(string: station.favicon),
+                size: 50,
+                cornerRadius: 12,
+                fallbackIcon: "antenna.radiowaves.left.and.right",
+                fallbackColor: .orange
+            )
             
-            // Info
             VStack(alignment: .leading, spacing: 2) {
                 Text(station.displayName)
                     .font(.system(size: 16, weight: .medium))
@@ -409,20 +321,18 @@ struct GlassStationRow: View {
             
             Spacer()
             
-            // STACKED BADGES
+            // Stacked Badges
             VStack(alignment: .trailing, spacing: 4) {
-                // 1. Listeners (Person Icon)
                 if let count = Int(station.formattedClicks.replacingOccurrences(of: "k", with: "")), count > 0 || station.formattedClicks.contains("k") {
                     HStack(spacing: 4) {
                         Text(station.formattedClicks)
                             .font(.caption.weight(.bold))
-                        Image(systemName: "person.fill") // UPDATED ICON
+                        Image(systemName: "person.fill")
                             .font(.caption2)
                     }
                     .foregroundColor(.primary)
                 }
                 
-                // 2. Bitrate (Waveform Icon)
                 if station.bitrate > 0 {
                     HStack(spacing: 4) {
                         Text("\(station.bitrate)k")
@@ -444,20 +354,7 @@ struct GlassStationRow: View {
             .buttonStyle(BorderlessButtonStyle())
         }
         .padding(12)
-        .background(.ultraThinMaterial)
-        .cornerRadius(16)
-        .overlay(
-            RoundedRectangle(cornerRadius: 16)
-                .stroke(Color.white.opacity(0.2), lineWidth: 1)
-        )
-        .shadow(color: Color.black.opacity(0.05), radius: 5, x: 0, y: 2)
-    }
-    
-    private var defaultIcon: some View {
-        RoundedRectangle(cornerRadius: 12)
-            .fill(LinearGradient(colors: [.orange.opacity(0.2), .red.opacity(0.2)], startPoint: .topLeading, endPoint: .bottomTrailing))
-            .frame(width: 50, height: 50)
-            .overlay(Image(systemName: "antenna.radiowaves.left.and.right").font(.system(size: 20)).foregroundColor(.orange))
+        .glassCard(cornerRadius: 16)
     }
 }
 
@@ -471,12 +368,7 @@ struct RadioFavoritesFullView: View {
     var body: some View {
         NavigationView {
             ZStack {
-                LinearGradient(
-                    colors: [Color.blue.opacity(0.1), Color.purple.opacity(0.1)],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
-                .ignoresSafeArea()
+                GlassBackgroundView()
                 
                 ScrollView {
                     LazyVStack(spacing: 12) {
