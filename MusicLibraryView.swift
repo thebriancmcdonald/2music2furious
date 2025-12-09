@@ -279,6 +279,7 @@ struct MusicLibraryView: View {
         if let track = library.createTrack(from: item) {
             UIImpactFeedbackGenerator(style: .medium).impactOccurred()
             musicPlayer.playNow(track)
+            musicPlayer.play() // UPDATED: Explicitly start playback
             dismiss()
         }
     }
@@ -296,6 +297,7 @@ struct MusicLibraryView: View {
         guard let firstTrack = tracks.first else { return }
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         musicPlayer.playNow(firstTrack)
+        musicPlayer.play() // UPDATED: Explicitly start playback
         for track in tracks.dropFirst() { musicPlayer.addTrackToQueue(track) }
         dismiss()
     }
@@ -312,6 +314,7 @@ struct MusicLibraryView: View {
         guard let firstTrack = tracks.first else { return }
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         musicPlayer.playNow(firstTrack)
+        musicPlayer.play() // UPDATED: Explicitly start playback
         for track in tracks.dropFirst() { musicPlayer.addTrackToQueue(track) }
         dismiss()
     }
@@ -328,6 +331,7 @@ struct MusicLibraryView: View {
         guard let firstTrack = tracks.first else { return }
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         musicPlayer.playNow(firstTrack)
+        musicPlayer.play() // UPDATED: Explicitly start playback
         for track in tracks.dropFirst() { musicPlayer.addTrackToQueue(track) }
         dismiss()
     }
@@ -342,6 +346,7 @@ struct MusicLibraryView: View {
     private func playUploadedTrack(_ track: Track) {
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         musicPlayer.playNow(track)
+        musicPlayer.play() // UPDATED: Explicitly start playback
         dismiss()
     }
     
@@ -442,6 +447,7 @@ struct MusicCollectionDetailView: View {
                             Button(action: {
                                 if let track = library.createTrack(from: item) {
                                     musicPlayer.playNow(track)
+                                    musicPlayer.play() // UPDATED: Explicitly start playback
                                     dismiss()
                                 }
                             }) {

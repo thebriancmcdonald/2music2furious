@@ -6,6 +6,8 @@
 //  - Added artwork caching (static cache across instances)
 //  - Batched state updates to reduce view rebuilds
 //  - Improved seek handling
+//  - FIXED: Playback position bug (ensure old track saves before new track loads)
+//  - FIXED: Music no longer saves/restores playback position
 //
 
 import Foundation
@@ -257,6 +259,9 @@ class AudioPlayer: NSObject, ObservableObject {
     // MARK: - Position Memory
     
     func saveCurrentPosition() {
+        // UPDATED: Never save position for Music player
+        guard playerType != "Music" else { return }
+        
         guard let track = currentTrack else { return }
         let position = self.currentTime
         if position > 5 { savePosition(for: track.filename, position: position) }
@@ -280,6 +285,9 @@ class AudioPlayer: NSObject, ObservableObject {
     }
     
     private func restoreSavedPosition() {
+        // UPDATED: Never restore position for Music player
+        guard playerType != "Music" else { return }
+        
         guard let track = currentTrack else { return }
         let savedPosition = getPosition(for: track.filename)
         if savedPosition > 5 { seek(to: savedPosition) }
@@ -292,21 +300,22 @@ class AudioPlayer: NSObject, ObservableObject {
         pause()
         queue.insert(track, at: 0)
         currentIndex = 0
-        currentTrack = track
+        // FIX: Don't set currentTrack here. Let loadTrack handle it AFTER stopping playback.
         loadTrackAndPlay(at: 0)
     }
     
     func loadTrack(at index: Int) {
         guard index >= 0 && index < queue.count else { return }
-        saveCurrentPosition()
         
-        // Batch state updates
+        // 1. Save state of current (OLD) track before switching
+        stopCurrentPlayback()
+        
+        // 2. Now update state to NEW track
         let track = queue[index]
         currentIndex = index
         currentTrack = track
         
-        stopCurrentPlayback()
-        
+        // 3. Load the new track
         if track.filename.starts(with: "ipod-library://") {
             loadFromAssetURL(track.filename)
         } else if track.filename.starts(with: "http") {
@@ -322,6 +331,7 @@ class AudioPlayer: NSObject, ObservableObject {
     }
     
     private func stopCurrentPlayback() {
+        // Save position of the CURRENT track (before it gets swapped out)
         saveCurrentPosition()
         
         if engine.isRunning {
@@ -390,6 +400,8 @@ class AudioPlayer: NSObject, ObservableObject {
             
             try engine.start()
             updateAudioEffects()
+            
+            // Now restore position.
             restoreSavedPosition()
             
         } catch {

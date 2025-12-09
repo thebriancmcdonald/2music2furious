@@ -121,6 +121,7 @@ struct PodcastSearchView: View {
                         .frame(height: 400)
                     } else {
                         ForEach(sortedDownloads, id: \.self) { filename in
+                            // UPDATED: Using refactored row
                             GlassDownloadedRow(
                                 filename: filename,
                                 searchManager: searchManager,
@@ -128,7 +129,6 @@ struct PodcastSearchView: View {
                             )
                             .glassListRowWide()
                             .swipeActions(edge: .trailing) {
-                                // UPDATED: Purple Delete
                                 Button {
                                     downloadManager.deleteEpisode(filename: filename)
                                 } label: {
@@ -290,33 +290,48 @@ struct GlassDownloadedRow: View {
     }
     
     var body: some View {
-        HStack(spacing: 16) {
-            MediaArtworkView(
-                url: artworkUrl,
-                size: 50,
-                cornerRadius: 10,
-                fallbackIcon: "mic.fill",
-                fallbackColor: .royalPurple
-            )
-            
-            VStack(alignment: .leading, spacing: 2) {
-                Text(episodeName)
-                    .font(.system(size: 15, weight: .medium))
-                    .foregroundColor(.primary)
-                    .lineLimit(2)
+        // UPDATED: Whole row is now a button
+        Button(action: onPlay) {
+            HStack(spacing: 16) {
+                MediaArtworkView(
+                    url: artworkUrl,
+                    size: 50,
+                    cornerRadius: 10,
+                    fallbackIcon: "mic.fill",
+                    fallbackColor: .royalPurple
+                )
                 
-                Text(podcastName)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .lineLimit(1)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(episodeName)
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundColor(.primary)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+                    
+                    Text(podcastName)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                }
+                
+                Spacer()
+                
+                // Visual Play Indicator (Non-Interactive)
+                ZStack {
+                    Circle()
+                        .fill(Color(white: 0.3))
+                        .frame(width: 28, height: 28)
+                    
+                    Image(systemName: "play.fill")
+                        .font(.system(size: 12))
+                        .foregroundColor(.white)
+                        .offset(x: 1)
+                }
             }
-            
-            Spacer()
-            
-            GlassPlayButton(size: 28, color: .royalPurple, action: onPlay)
+            .padding(12)
+            .glassCard(cornerRadius: 16)
         }
-        .padding(12)
-        .glassCard(cornerRadius: 16)
+        .buttonStyle(PlainButtonStyle()) // Prevents flashing box style
     }
 }
 
@@ -526,7 +541,6 @@ struct EpisodesBrowseView: View {
                                 onPlay: downloadManager.isDownloaded(filename: filenameForEpisode(episode)) ? { playEpisode(episode) } : nil
                             )
                             .glassListRow()
-                            // UPDATED: PURPLE DELETE SWIPE
                             .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                                 if downloadManager.isDownloaded(filename: filenameForEpisode(episode)) {
                                     Button {
@@ -534,7 +548,7 @@ struct EpisodesBrowseView: View {
                                     } label: {
                                         Label("Delete", systemImage: "trash")
                                     }
-                                    .tint(.royalPurple) // Custom Purple
+                                    .tint(.royalPurple)
                                 }
                             }
                         }

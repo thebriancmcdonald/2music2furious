@@ -43,6 +43,7 @@ struct BookLibraryView: View {
                             .glassListRow()
                             .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                                 Button(role: .destructive) { bookManager.removeBook(book) } label: { Label("Delete", systemImage: "trash") }
+                                    .tint(.royalPurple)
                             }
                         }
                     }
@@ -65,7 +66,6 @@ struct BookLibraryView: View {
                     GlassCloseButton(action: dismiss)
                 }
                 ToolbarItemGroup(placement: .primaryAction) {
-                    // UPDATED: Forced White for visibility against dark header
                     Button { showingFilePicker = true } label: {
                         Image(systemName: "square.and.arrow.up")
                             .foregroundColor(.white)
@@ -191,7 +191,7 @@ struct LocalBookDetailView: View {
             List {
                 Section {
                     VStack(spacing: 20) {
-                        // Header using shared component
+                        // Header
                         MediaDetailHeader(
                             title: book.displayTitle,
                             subtitle: book.displayAuthor,
@@ -206,7 +206,7 @@ struct LocalBookDetailView: View {
                         GlassActionButton(
                             title: "Resume",
                             icon: "play.fill",
-                            color: .deepResumePurple, // UPDATED: Darker purple for large area
+                            color: .deepResumePurple,
                             action: { onPlayChapter(book.currentChapterIndex) }
                         )
                         
@@ -235,33 +235,36 @@ struct LocalBookDetailView: View {
                 
                 Section {
                     ForEach(chaptersToDisplay) { chapter in
-                        GlassChapterRow(
-                            index: chapter.index,
+                        // UPDATED: Using Unified GlassDownloadRow
+                        // Logic: Tapping the row triggers the action (Download or Play)
+                        GlassDownloadRow(
+                            index: chapter.index + 1,
                             title: chapter.title,
-                            duration: chapter.duration,
+                            subtitle: chapter.duration,
                             isDownloaded: chapter.isDownloaded,
-                            isPlaying: chapter.filename != nil && book.chapters.firstIndex(where: { $0.filename == chapter.filename }) == book.currentChapterIndex,
                             isDownloading: chapter.remoteChapter != nil && downloadManager.isDownloading(bookId: book.librivoxChapters?.first?.id ?? "", chapterId: chapter.remoteChapter!.id),
                             color: .royalPurple,
-                            onPlay: chapter.isDownloaded ? {
+                            onDownload: {
+                                if !chapter.isDownloaded, let remote = chapter.remoteChapter {
+                                    downloadManager.downloadSingleChapter(
+                                        chapter: remote,
+                                        bookId: book.title,
+                                        bookTitle: book.title,
+                                        author: book.displayAuthor,
+                                        coverUrl: book.coverArtUrl,
+                                        description: book.description,
+                                        index: chapter.index,
+                                        bookManager: bookManager,
+                                        fullChapterList: book.librivoxChapters
+                                    )
+                                    showToast("Downloading...")
+                                }
+                            },
+                            onPlay: {
                                 if let filename = chapter.filename, let realIndex = book.chapters.firstIndex(where: { $0.filename == filename }) {
                                     onPlayChapter(realIndex)
                                 }
-                            } : nil,
-                            onDownload: !chapter.isDownloaded && chapter.remoteChapter != nil ? {
-                                downloadManager.downloadSingleChapter(
-                                    chapter: chapter.remoteChapter!,
-                                    bookId: book.title,
-                                    bookTitle: book.title,
-                                    author: book.displayAuthor,
-                                    coverUrl: book.coverArtUrl,
-                                    description: book.description,
-                                    index: chapter.index,
-                                    bookManager: bookManager,
-                                    fullChapterList: book.librivoxChapters
-                                )
-                                showToast("Downloading...")
-                            } : nil
+                            }
                         )
                         .glassListRow()
                         .swipeActions(edge: .trailing, allowsFullSwipe: true) {
@@ -269,6 +272,7 @@ struct LocalBookDetailView: View {
                                 Button(role: .destructive) {
                                     bookManager.deleteChapterFile(filename: filename, from: book)
                                 } label: { Label("Delete", systemImage: "trash") }
+                                    .tint(.royalPurple)
                             }
                         }
                     }

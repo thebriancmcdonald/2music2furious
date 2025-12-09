@@ -12,14 +12,12 @@ import MediaPlayer
 // MARK: - SYSTEMIC COLOR LOGIC
 extension Color {
     // 1. MASTER THEME COLOR
-    // Change this single line to .green, .orange, etc. to update the whole app.
     static let brandPrimary = Color.purple
     
-    // 2. SEMANTIC NAMES (Use these in your Views)
-    static let royalPurple = brandPrimary // For text, icons, borders
+    // 2. SEMANTIC NAMES
+    static let royalPurple = brandPrimary
     
     // 3. AUTOMATIC DARK VARIANT
-    // Mathematically mixes the brand color with 40% black for large button backgrounds
     static let deepResumePurple = brandPrimary.mix(with: .black, by: 0.4)
     
     // Helper: Mixes two colors together
@@ -89,10 +87,14 @@ struct GlassSearchBar: View {
                 }) {
                     Image(systemName: "xmark.circle.fill")
                         .foregroundColor(.secondary)
+                        .frame(width: 44, height: 44) // HIT TARGET FIX
+                        .contentShape(Rectangle())
                 }
             }
         }
-        .padding(10)
+        .padding(.leading, 10)
+        .padding(.trailing, text.isEmpty ? 10 : 0)
+        .padding(.vertical, 6)
         .background(.ultraThinMaterial)
         .cornerRadius(12)
         .overlay(
@@ -149,7 +151,7 @@ struct GlassEmptyStateView: View {
                             }
                             .foregroundColor(.primary)
                             .frame(maxWidth: .infinity)
-                            .frame(height: 90) // Fixed height ensures buttons are same size
+                            .frame(height: 90)
                             .background(.ultraThinMaterial)
                             .cornerRadius(16)
                             .overlay(
@@ -192,6 +194,9 @@ struct ExpandableDescriptionView: View {
                 Text(isExpanded ? "Show Less" : "Show More")
                     .font(.caption.weight(.bold))
                     .foregroundColor(color)
+                    .padding(.top, 4)
+                    .frame(height: 44, alignment: .top) // HIT TARGET FIX
+                    .contentShape(Rectangle())
             }
         }
         .padding()
@@ -298,6 +303,8 @@ struct MediaDetailHeader: View {
                     Image(systemName: isFav ? "star.fill" : "star")
                         .font(.system(size: 24))
                         .foregroundColor(.orange)
+                        .frame(width: 44, height: 44) // HIT TARGET FIX
+                        .contentShape(Rectangle())
                 }
             }
         }
@@ -345,7 +352,8 @@ struct GlassActionButton: View {
 }
 
 // MARK: - Glass Media List Row (Unified for Search Results)
-// Replaces LibriVoxBookRow and GlassPodcastRow
+// Used for: Podcast Search Results, Favorites List, LibriVox Search
+// Interaction: Split (Row navigates, Right Icon acts)
 
 struct GlassMediaListRow: View {
     let title: String
@@ -353,7 +361,7 @@ struct GlassMediaListRow: View {
     var artworkURL: URL?
     var artworkIcon: String = "music.note"
     var artworkColor: Color = .royalPurple
-    var details: String? = nil // e.g. "23 chapters"
+    var details: String? = nil
     var rightIcon: String? = "chevron.right"
     var isFavorite: Bool? = nil
     var onFavoriteToggle: (() -> Void)? = nil
@@ -393,6 +401,8 @@ struct GlassMediaListRow: View {
                     Image(systemName: isFav ? "star.fill" : "star")
                         .foregroundColor(.orange)
                         .font(.system(size: 20))
+                        .frame(width: 44, height: 44) // HIT TARGET FIX: Big hit box for star
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(BorderlessButtonStyle())
             } else if let rightIcon = rightIcon {
@@ -407,66 +417,86 @@ struct GlassMediaListRow: View {
 }
 
 // MARK: - Glass Download Row (Unified for Chapters/Episodes)
-// Replaces LibriVoxChapterRow and GlassEpisodeDownloadRow
+// Used for: Podcast Episode List, Book Detail Chapter List
+// Interaction: Single (Whole row triggers action)
 
 struct GlassDownloadRow: View {
-    var index: Int? = nil // Optional index number (1, 2, 3...)
+    var index: Int? = nil
     let title: String
-    let subtitle: String // Duration or other info
+    let subtitle: String
     
-    // State management
+    // State
     var isDownloaded: Bool
     var isDownloading: Bool
     var color: Color = .royalPurple
     
     // Actions
     var onDownload: () -> Void
-    var onPlay: (() -> Void)? = nil // If nil, checkmark is shown when downloaded
+    var onPlay: (() -> Void)? = nil
     
     var body: some View {
-        HStack(spacing: 12) {
-            if let index = index {
-                Text("\(index)")
-                    .font(.system(size: 14, weight: .bold))
-                    .foregroundColor(.secondary)
-                    .frame(width: 30)
-            }
-            
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(.system(size: 15, weight: .medium))
-                    .foregroundColor(.primary)
-                    .lineLimit(1)
-                
-                Text(subtitle)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-            
-            Spacer()
-            
+        Button(action: {
+            if isDownloading { return } // Do nothing if busy
             if isDownloaded {
-                if let onPlay = onPlay {
-                    GlassPlayButton(size: 28, color: color, action: onPlay)
-                } else {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundColor(.green)
-                        .font(.system(size: 20))
-                }
-            } else if isDownloading {
-                ProgressView()
-                    .scaleEffect(0.8)
+                onPlay?()
             } else {
-                Button(action: onDownload) {
+                onDownload()
+            }
+        }) {
+            HStack(spacing: 12) {
+                if let index = index {
+                    Text("\(index)")
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundColor(.secondary)
+                        .frame(width: 30)
+                }
+                
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundColor(.primary)
+                        .lineLimit(1)
+                        .multilineTextAlignment(.leading)
+                    
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                
+                Spacer()
+                
+                // Visual Indicator (Not a button anymore)
+                if isDownloaded {
+                    if onPlay != nil {
+                        // Just the visual of the play button
+                        ZStack {
+                            Circle()
+                                .fill(Color(white: 0.3))
+                                .frame(width: 28, height: 28)
+                            Image(systemName: "play.fill")
+                                .font(.system(size: 12))
+                                .foregroundColor(.white)
+                                .offset(x: 1)
+                        }
+                    } else {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundColor(.green)
+                            .font(.system(size: 20))
+                    }
+                } else if isDownloading {
+                    ProgressView()
+                        .scaleEffect(0.8)
+                        .frame(width: 28, height: 28)
+                } else {
                     Image(systemName: "arrow.down.circle")
                         .foregroundColor(color)
                         .font(.system(size: 24))
                 }
-                .buttonStyle(BorderlessButtonStyle())
             }
+            .padding(12)
+            .glassCard(cornerRadius: 12)
         }
-        .padding(12)
-        .glassCard(cornerRadius: 12)
+        .buttonStyle(PlainButtonStyle()) // Ensures no flashing blue background on tap
     }
 }
 
@@ -499,6 +529,8 @@ struct GlassSectionHeader: View {
                         .padding(8)
                         .background(.ultraThinMaterial)
                         .clipShape(Circle())
+                        .frame(width: 44, height: 44) // HIT TARGET FIX
+                        .contentShape(Rectangle())
                 }
             }
         }
@@ -548,6 +580,8 @@ struct FavoritesCarousel<Item: Identifiable, Content: View>: View {
                             .padding(8)
                             .background(.ultraThinMaterial)
                             .clipShape(Circle())
+                            .frame(width: 44, height: 44) // HIT TARGET FIX
+                            .contentShape(Rectangle())
                     }
                 }
             }
@@ -628,6 +662,8 @@ struct GlassCloseButton: View {
             Image(systemName: "xmark")
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundColor(.primary)
+                .frame(width: 44, height: 44) // HIT TARGET FIX
+                .contentShape(Rectangle())
         }
     }
 }
@@ -679,6 +715,8 @@ struct GlassChapterRow: View {
                         }
                     }
                     .buttonStyle(BorderlessButtonStyle())
+                    .frame(width: 44, height: 44) // HIT TARGET FIX
+                    .contentShape(Rectangle())
                 }
             } else {
                 if isDownloading {
@@ -691,6 +729,8 @@ struct GlassChapterRow: View {
                             .font(.system(size: 20))
                     }
                     .buttonStyle(BorderlessButtonStyle())
+                    .frame(width: 44, height: 44) // HIT TARGET FIX
+                    .contentShape(Rectangle())
                 }
             }
         }
@@ -717,6 +757,8 @@ struct GlassPlusButton: View {
                 .padding(8)
                 .background(.ultraThinMaterial)
                 .clipShape(Circle())
+                .frame(width: 44, height: 44) // HIT TARGET FIX
+                .contentShape(Rectangle())
         }
         .buttonStyle(BorderlessButtonStyle())
     }
@@ -744,6 +786,8 @@ struct GlassPlayButton: View {
                     .offset(x: 1) // Optical alignment
             }
             .shadow(radius: 2)
+            .frame(width: 44, height: 44) // HIT TARGET FIX: Big invisible area
+            .contentShape(Rectangle())
         }
         .buttonStyle(BorderlessButtonStyle())
     }
