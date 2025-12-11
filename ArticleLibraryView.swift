@@ -191,41 +191,37 @@ struct ArticleLibraryView: View {
     // MARK: - Actions
 
     private func addArticleFromURL() {
-        guard let url = URL(string: urlInput), !urlInput.isEmpty else {
-            showToast("Please enter a valid URL")
+        // Normalize URL input - add https:// if missing
+        var urlString = urlInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !urlString.isEmpty && !urlString.hasPrefix("http://") && !urlString.hasPrefix("https://") {
+            urlString = "https://" + urlString
+        }
+
+        guard let url = URL(string: urlString), !urlString.isEmpty else {
+            showToast("Please enter a valid URL", icon: "exclamationmark.triangle.fill")
             return
         }
 
         isLoadingURL = true
 
-        // For Phase 1, we'll create a placeholder article
-        // Real URL extraction comes in Phase 3/4
-        let title = url.lastPathComponent.isEmpty ? "Web Article" : url.lastPathComponent
-            .replacingOccurrences(of: "-", with: " ")
-            .replacingOccurrences(of: "_", with: " ")
-            .capitalized
+        Task {
+            do {
+                let article = try await WebArticleExtractor.extractArticle(from: url)
 
-        // Placeholder content - real extraction will replace this
-        let placeholderContent = """
-        This article was saved from \(url.host ?? "the web").
-
-        Full article extraction will be available in a future update. For now, you can paste article text directly using the "Paste Text" option.
-
-        URL: \(url.absoluteString)
-        """
-
-        let article = articleManager.createArticleFromURL(
-            url: url,
-            title: title,
-            content: placeholderContent
-        )
-
-        articleManager.addArticle(article)
-
-        urlInput = ""
-        isLoadingURL = false
-        showingAddURL = false
-        showToast("Article saved!")
+                await MainActor.run {
+                    articleManager.addArticle(article)
+                    urlInput = ""
+                    isLoadingURL = false
+                    showingAddURL = false
+                    showToast("\"\(article.title)\" saved!")
+                }
+            } catch {
+                await MainActor.run {
+                    isLoadingURL = false
+                    showToast("Failed: \(error.localizedDescription)", icon: "exclamationmark.triangle.fill")
+                }
+            }
+        }
     }
 
     private func addArticleFromText() {

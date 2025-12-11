@@ -513,3 +513,281 @@ enum MiniZip {
         return Data(bytes: destinationBuffer, count: decompressedSize)
     }
 }
+
+// MARK: - Web Article Extractor
+
+class WebArticleExtractor {
+
+    enum ExtractionError: LocalizedError {
+        case invalidURL
+        case networkError(String)
+        case parsingError
+        case noContent
+
+        var errorDescription: String? {
+            switch self {
+            case .invalidURL: return "Invalid URL"
+            case .networkError(let msg): return "Network error: \(msg)"
+            case .parsingError: return "Could not parse article"
+            case .noContent: return "No readable content found"
+            }
+        }
+    }
+
+    /// Fetches and extracts article content from a web URL
+    static func extractArticle(from url: URL) async throws -> Article {
+        // Fetch the HTML
+        let (data, response) = try await URLSession.shared.data(from: url)
+
+        guard let httpResponse = response as? HTTPURLResponse,
+              (200...299).contains(httpResponse.statusCode) else {
+            throw ExtractionError.networkError("Server returned an error")
+        }
+
+        // Detect encoding
+        let encoding: String.Encoding = detectEncoding(from: httpResponse, data: data)
+
+        guard let html = String(data: data, encoding: encoding) ?? String(data: data, encoding: .utf8) else {
+            throw ExtractionError.parsingError
+        }
+
+        // Extract article content
+        let (title, content, author) = extractContent(from: html, url: url)
+
+        guard !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw ExtractionError.noContent
+        }
+
+        // Split into chapters based on headers
+        let chapters = ArticleManager.shared.splitIntoChapters(title: title, content: content)
+
+        return Article(
+            title: title,
+            source: url.host?.replacingOccurrences(of: "www.", with: "") ?? "Web",
+            sourceURL: url,
+            author: author,
+            chapters: chapters
+        )
+    }
+
+    private static func detectEncoding(from response: HTTPURLResponse, data: Data) -> String.Encoding {
+        // Check Content-Type header
+        if let contentType = response.value(forHTTPHeaderField: "Content-Type"),
+           contentType.lowercased().contains("charset=utf-8") {
+            return .utf8
+        }
+
+        // Check meta tag in HTML
+        if let htmlPrefix = String(data: data.prefix(1024), encoding: .ascii) {
+            if htmlPrefix.lowercased().contains("charset=utf-8") ||
+               htmlPrefix.lowercased().contains("charset=\"utf-8\"") {
+                return .utf8
+            }
+            if htmlPrefix.lowercased().contains("charset=iso-8859-1") ||
+               htmlPrefix.lowercased().contains("charset=\"iso-8859-1\"") {
+                return .isoLatin1
+            }
+        }
+
+        return .utf8
+    }
+
+    private static func extractContent(from html: String, url: URL) -> (title: String, content: String, author: String?) {
+        var title = ""
+        var content = ""
+        var author: String? = nil
+
+        // Extract title - try multiple sources
+        // 1. og:title meta tag
+        if let ogTitle = extractMetaContent(from: html, property: "og:title") {
+            title = ogTitle
+        }
+        // 2. <title> tag
+        else if let titleMatch = html.range(of: "<title[^>]*>(.*?)</title>", options: .regularExpression) {
+            title = String(html[titleMatch])
+                .replacingOccurrences(of: "<title[^>]*>", with: "", options: .regularExpression)
+                .replacingOccurrences(of: "</title>", with: "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        // Extract author
+        if let authorMeta = extractMetaContent(from: html, name: "author") {
+            author = authorMeta
+        } else if let authorMeta = extractMetaContent(from: html, property: "article:author") {
+            author = authorMeta
+        }
+
+        // Extract main content
+        content = extractMainContent(from: html)
+
+        // Clean up title
+        if title.isEmpty {
+            title = url.lastPathComponent
+                .replacingOccurrences(of: "-", with: " ")
+                .replacingOccurrences(of: "_", with: " ")
+                .replacingOccurrences(of: ".html", with: "")
+                .replacingOccurrences(of: ".htm", with: "")
+            if title.isEmpty {
+                title = "Web Article"
+            }
+        }
+
+        // Remove site name from title (common pattern: "Article Title | Site Name")
+        if let pipeRange = title.range(of: " | ") {
+            title = String(title[..<pipeRange.lowerBound])
+        }
+        if let dashRange = title.range(of: " - ", options: .backwards) {
+            let beforeDash = String(title[..<dashRange.lowerBound])
+            if beforeDash.count > 10 { // Likely the actual title
+                title = beforeDash
+            }
+        }
+
+        return (title.trimmingCharacters(in: .whitespacesAndNewlines),
+                content.trimmingCharacters(in: .whitespacesAndNewlines),
+                author)
+    }
+
+    private static func extractMetaContent(from html: String, property: String? = nil, name: String? = nil) -> String? {
+        let pattern: String
+        if let property = property {
+            pattern = "<meta[^>]*property=[\"']\(property)[\"'][^>]*content=[\"']([^\"']*)[\"']|<meta[^>]*content=[\"']([^\"']*)[\"'][^>]*property=[\"']\(property)[\"']"
+        } else if let name = name {
+            pattern = "<meta[^>]*name=[\"']\(name)[\"'][^>]*content=[\"']([^\"']*)[\"']|<meta[^>]*content=[\"']([^\"']*)[\"'][^>]*name=[\"']\(name)[\"']"
+        } else {
+            return nil
+        }
+
+        if let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive),
+           let match = regex.firstMatch(in: html, range: NSRange(html.startIndex..., in: html)) {
+            // Try both capture groups
+            for i in 1...2 {
+                if let range = Range(match.range(at: i), in: html) {
+                    let value = String(html[range])
+                    if !value.isEmpty {
+                        return decodeHTMLEntities(value)
+                    }
+                }
+            }
+        }
+        return nil
+    }
+
+    private static func extractMainContent(from html: String) -> String {
+        var content = html
+
+        // Try to find article/main content containers
+        let contentSelectors = [
+            "<article[^>]*>([\\s\\S]*?)</article>",
+            "<main[^>]*>([\\s\\S]*?)</main>",
+            "<div[^>]*class=[\"'][^\"']*(?:article|content|post|entry|story)[^\"']*[\"'][^>]*>([\\s\\S]*?)</div>",
+            "<div[^>]*id=[\"'][^\"']*(?:article|content|post|entry|story)[^\"']*[\"'][^>]*>([\\s\\S]*?)</div>"
+        ]
+
+        for selector in contentSelectors {
+            if let regex = try? NSRegularExpression(pattern: selector, options: .caseInsensitive),
+               let match = regex.firstMatch(in: html, range: NSRange(html.startIndex..., in: html)),
+               let range = Range(match.range(at: 1), in: html) {
+                content = String(html[range])
+                break
+            }
+        }
+
+        // If no container found, use body
+        if content == html {
+            if let bodyMatch = html.range(of: "<body[^>]*>([\\s\\S]*?)</body>", options: .regularExpression),
+               let bodyRange = Range(bodyMatch, in: html) {
+                content = String(html[bodyRange])
+            }
+        }
+
+        // Remove unwanted elements
+        let removePatterns = [
+            "<script[^>]*>[\\s\\S]*?</script>",
+            "<style[^>]*>[\\s\\S]*?</style>",
+            "<nav[^>]*>[\\s\\S]*?</nav>",
+            "<footer[^>]*>[\\s\\S]*?</footer>",
+            "<header[^>]*>[\\s\\S]*?</header>",
+            "<aside[^>]*>[\\s\\S]*?</aside>",
+            "<form[^>]*>[\\s\\S]*?</form>",
+            "<iframe[^>]*>[\\s\\S]*?</iframe>",
+            "<noscript[^>]*>[\\s\\S]*?</noscript>",
+            "<!--[\\s\\S]*?-->",
+            "<div[^>]*class=[\"'][^\"']*(?:comment|sidebar|widget|ad|social|share|related|footer|header|nav|menu)[^\"']*[\"'][^>]*>[\\s\\S]*?</div>"
+        ]
+
+        for pattern in removePatterns {
+            content = content.replacingOccurrences(of: pattern, with: "", options: .regularExpression)
+        }
+
+        // Convert headers to markdown style for chapter detection
+        content = content.replacingOccurrences(of: "<h1[^>]*>([^<]*)</h1>", with: "\n## $1\n", options: .regularExpression)
+        content = content.replacingOccurrences(of: "<h2[^>]*>([^<]*)</h2>", with: "\n## $1\n", options: .regularExpression)
+        content = content.replacingOccurrences(of: "<h3[^>]*>([^<]*)</h3>", with: "\n### $1\n", options: .regularExpression)
+
+        // Convert block elements to newlines
+        content = content.replacingOccurrences(of: "<br[^>]*>", with: "\n", options: .regularExpression)
+        content = content.replacingOccurrences(of: "</p>", with: "\n\n", options: .caseInsensitive)
+        content = content.replacingOccurrences(of: "</div>", with: "\n", options: .caseInsensitive)
+        content = content.replacingOccurrences(of: "</li>", with: "\n", options: .caseInsensitive)
+        content = content.replacingOccurrences(of: "<li[^>]*>", with: "• ", options: .regularExpression)
+
+        // Remove all remaining HTML tags
+        content = content.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+
+        // Decode HTML entities
+        content = decodeHTMLEntities(content)
+
+        // Clean up whitespace
+        content = content.replacingOccurrences(of: "[ \\t]+", with: " ", options: .regularExpression)
+        content = content.replacingOccurrences(of: "\n{3,}", with: "\n\n", options: .regularExpression)
+        content = content.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        return content
+    }
+
+    private static func decodeHTMLEntities(_ string: String) -> String {
+        var result = string
+        let entities: [(String, String)] = [
+            ("&nbsp;", " "),
+            ("&amp;", "&"),
+            ("&lt;", "<"),
+            ("&gt;", ">"),
+            ("&quot;", "\""),
+            ("&#39;", "'"),
+            ("&apos;", "'"),
+            ("&mdash;", "—"),
+            ("&ndash;", "–"),
+            ("&hellip;", "…"),
+            ("&ldquo;", """),
+            ("&rdquo;", """),
+            ("&lsquo;", "'"),
+            ("&rsquo;", "'"),
+            ("&copy;", "©"),
+            ("&reg;", "®"),
+            ("&trade;", "™"),
+            ("&bull;", "•"),
+            ("&middot;", "·")
+        ]
+
+        for (entity, replacement) in entities {
+            result = result.replacingOccurrences(of: entity, with: replacement)
+        }
+
+        // Numeric entities
+        let numericPattern = "&#(\\d+);"
+        if let regex = try? NSRegularExpression(pattern: numericPattern) {
+            let matches = regex.matches(in: result, range: NSRange(result.startIndex..., in: result))
+            for match in matches.reversed() {
+                if let range = Range(match.range, in: result),
+                   let numRange = Range(match.range(at: 1), in: result),
+                   let codePoint = Int(result[numRange]),
+                   let scalar = Unicode.Scalar(codePoint) {
+                    result.replaceSubrange(range, with: String(Character(scalar)))
+                }
+            }
+        }
+
+        return result
+    }
+}
