@@ -1,0 +1,345 @@
+//
+//  TTSManager.swift
+//  2 Music 2 Furious
+//
+//  Text-to-Speech manager using AVSpeechSynthesizer
+//  Provides word-by-word callbacks for highlighting
+//
+
+import Foundation
+import AVFoundation
+import Combine
+
+class TTSManager: NSObject, ObservableObject {
+    static let shared = TTSManager()
+
+    // MARK: - Published Properties
+
+    @Published var isPlaying = false
+    @Published var isPaused = false
+    @Published var currentWordRange: NSRange = NSRange(location: 0, length: 0)
+    @Published var progress: Double = 0  // 0.0 to 1.0
+    @Published var playbackSpeed: Float = 1.0 {
+        didSet {
+            // Speed changes require restarting from current position
+            if isPlaying {
+                let currentPos = currentCharacterPosition
+                stop()
+                speak(from: currentPos)
+            }
+        }
+    }
+
+    // Voice settings
+    @Published var selectedVoiceIdentifier: String? = nil
+
+    // MARK: - Current State
+
+    private(set) var currentText: String = ""
+    private(set) var currentCharacterPosition: Int = 0
+
+    // Callbacks
+    var onWordSpoken: ((NSRange) -> Void)?
+    var onFinished: (() -> Void)?
+    var onChapterFinished: (() -> Void)?
+
+    // MARK: - Private Properties
+
+    private let synthesizer = AVSpeechSynthesizer()
+    private var utterance: AVSpeechUtterance?
+
+    // For tracking position when paused
+    private var pausedAtPosition: Int = 0
+
+    // MARK: - Available Voices
+
+    static var availableVoices: [AVSpeechSynthesisVoice] {
+        AVSpeechSynthesisVoice.speechVoices()
+            .filter { $0.language.starts(with: "en") }
+            .sorted { $0.quality.rawValue > $1.quality.rawValue }
+    }
+
+    static var defaultVoice: AVSpeechSynthesisVoice? {
+        // Prefer enhanced/premium voices
+        let voices = availableVoices
+        return voices.first { $0.quality == .enhanced }
+            ?? voices.first { $0.quality == .default }
+            ?? voices.first
+    }
+
+    // MARK: - Initialization
+
+    override init() {
+        super.init()
+        synthesizer.delegate = self
+        setupAudioSession()
+    }
+
+    private func setupAudioSession() {
+        do {
+            let session = AVAudioSession.sharedInstance()
+            try session.setCategory(.playback, mode: .spokenAudio, options: [.duckOthers])
+            try session.setActive(true)
+        } catch {
+            print("TTSManager: Failed to setup audio session: \(error)")
+        }
+    }
+
+    // MARK: - Public API
+
+    /// Load text for speaking
+    func loadText(_ text: String) {
+        stop()
+        currentText = text
+        currentCharacterPosition = 0
+        progress = 0
+    }
+
+    /// Start speaking from the beginning or current position
+    func play() {
+        if isPaused {
+            resume()
+        } else {
+            speak(from: currentCharacterPosition)
+        }
+    }
+
+    /// Pause speaking
+    func pause() {
+        if synthesizer.isSpeaking {
+            synthesizer.pauseSpeaking(at: .immediate)
+            isPaused = true
+            isPlaying = false
+        }
+    }
+
+    /// Resume speaking after pause
+    func resume() {
+        if isPaused {
+            synthesizer.continueSpeaking()
+            isPaused = false
+            isPlaying = true
+        }
+    }
+
+    /// Stop speaking completely
+    func stop() {
+        synthesizer.stopSpeaking(at: .immediate)
+        isPlaying = false
+        isPaused = false
+    }
+
+    /// Toggle play/pause
+    func togglePlayPause() {
+        if isPlaying {
+            pause()
+        } else {
+            play()
+        }
+    }
+
+    /// Seek to a specific character position
+    func seek(to characterPosition: Int) {
+        let wasPlaying = isPlaying
+        stop()
+        currentCharacterPosition = max(0, min(characterPosition, currentText.count))
+        updateProgress()
+        if wasPlaying {
+            speak(from: currentCharacterPosition)
+        }
+    }
+
+    /// Seek to a percentage (0.0 to 1.0)
+    func seekToPercent(_ percent: Double) {
+        let position = Int(Double(currentText.count) * percent)
+        seek(to: position)
+    }
+
+    /// Skip forward by approximate word count
+    func skipForward(words: Int = 10) {
+        let newPosition = findWordBoundary(from: currentCharacterPosition, direction: .forward, count: words)
+        seek(to: newPosition)
+    }
+
+    /// Skip backward by approximate word count
+    func skipBackward(words: Int = 10) {
+        let newPosition = findWordBoundary(from: currentCharacterPosition, direction: .backward, count: words)
+        seek(to: newPosition)
+    }
+
+    /// Cycle through speed options
+    func cycleSpeed() {
+        let speeds: [Float] = [1.0, 1.25, 1.5, 1.75, 2.0]
+        if let currentIndex = speeds.firstIndex(of: playbackSpeed) {
+            let nextIndex = (currentIndex + 1) % speeds.count
+            playbackSpeed = speeds[nextIndex]
+        } else {
+            playbackSpeed = 1.0
+        }
+    }
+
+    // MARK: - Private Methods
+
+    private func speak(from position: Int) {
+        guard !currentText.isEmpty else { return }
+
+        // Get text from position to end
+        let startIndex = currentText.index(currentText.startIndex, offsetBy: min(position, currentText.count))
+        let textToSpeak = String(currentText[startIndex...])
+
+        guard !textToSpeak.isEmpty else {
+            onChapterFinished?()
+            return
+        }
+
+        currentCharacterPosition = position
+
+        // Create utterance
+        let newUtterance = AVSpeechUtterance(string: textToSpeak)
+
+        // Set voice
+        if let voiceId = selectedVoiceIdentifier,
+           let voice = AVSpeechSynthesisVoice(identifier: voiceId) {
+            newUtterance.voice = voice
+        } else if let defaultVoice = TTSManager.defaultVoice {
+            newUtterance.voice = defaultVoice
+        }
+
+        // Set rate (0.0 to 1.0, where 0.5 is normal)
+        // Map our 1.0-2.0 scale to AVSpeechUtterance's scale
+        newUtterance.rate = mapSpeedToRate(playbackSpeed)
+
+        // Other settings
+        newUtterance.pitchMultiplier = 1.0
+        newUtterance.volume = 1.0
+
+        utterance = newUtterance
+        isPlaying = true
+        isPaused = false
+
+        synthesizer.speak(newUtterance)
+    }
+
+    private func mapSpeedToRate(_ speed: Float) -> Float {
+        // AVSpeechUtterance rate: 0.0 (slowest) to 1.0 (fastest), 0.5 is default
+        // Our speed: 1.0 (normal) to 2.0 (fast)
+        // Map 1.0 -> 0.5, 2.0 -> 0.65 (not too fast to be unintelligible)
+        let minRate: Float = 0.5
+        let maxRate: Float = 0.65
+        let normalizedSpeed = (speed - 1.0) / 1.0  // 0.0 to 1.0
+        return minRate + (normalizedSpeed * (maxRate - minRate))
+    }
+
+    private func updateProgress() {
+        guard !currentText.isEmpty else {
+            progress = 0
+            return
+        }
+        progress = Double(currentCharacterPosition) / Double(currentText.count)
+    }
+
+    private enum Direction {
+        case forward, backward
+    }
+
+    private func findWordBoundary(from position: Int, direction: Direction, count: Int) -> Int {
+        let text = currentText as NSString
+        var currentPos = position
+        var wordsFound = 0
+
+        switch direction {
+        case .forward:
+            while currentPos < text.length && wordsFound < count {
+                // Skip current word
+                while currentPos < text.length && !text.character(at: currentPos).isWhitespace {
+                    currentPos += 1
+                }
+                // Skip whitespace
+                while currentPos < text.length && text.character(at: currentPos).isWhitespace {
+                    currentPos += 1
+                }
+                wordsFound += 1
+            }
+        case .backward:
+            while currentPos > 0 && wordsFound < count {
+                // Skip whitespace
+                while currentPos > 0 && text.character(at: currentPos - 1).isWhitespace {
+                    currentPos -= 1
+                }
+                // Skip word
+                while currentPos > 0 && !text.character(at: currentPos - 1).isWhitespace {
+                    currentPos -= 1
+                }
+                wordsFound += 1
+            }
+        }
+
+        return currentPos
+    }
+}
+
+// MARK: - AVSpeechSynthesizerDelegate
+
+extension TTSManager: AVSpeechSynthesizerDelegate {
+
+    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didStart utterance: AVSpeechUtterance) {
+        DispatchQueue.main.async {
+            self.isPlaying = true
+            self.isPaused = false
+        }
+    }
+
+    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didPause utterance: AVSpeechUtterance) {
+        DispatchQueue.main.async {
+            self.isPlaying = false
+            self.isPaused = true
+        }
+    }
+
+    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didContinue utterance: AVSpeechUtterance) {
+        DispatchQueue.main.async {
+            self.isPlaying = true
+            self.isPaused = false
+        }
+    }
+
+    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
+        DispatchQueue.main.async {
+            self.isPlaying = false
+            self.isPaused = false
+            self.onChapterFinished?()
+        }
+    }
+
+    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
+        DispatchQueue.main.async {
+            self.isPlaying = false
+            self.isPaused = false
+        }
+    }
+
+    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer,
+                           willSpeakRangeOfSpeechString characterRange: NSRange,
+                           utterance: AVSpeechUtterance) {
+        DispatchQueue.main.async {
+            // Adjust range to account for our starting position
+            let adjustedRange = NSRange(
+                location: self.currentCharacterPosition + characterRange.location,
+                length: characterRange.length
+            )
+
+            self.currentWordRange = adjustedRange
+            self.currentCharacterPosition = adjustedRange.location
+            self.updateProgress()
+            self.onWordSpoken?(adjustedRange)
+        }
+    }
+}
+
+// MARK: - Helper Extension
+
+private extension unichar {
+    var isWhitespace: Bool {
+        CharacterSet.whitespacesAndNewlines.contains(UnicodeScalar(self)!)
+    }
+}

@@ -2,8 +2,8 @@
 //  ArticleReaderView.swift
 //  2 Music 2 Furious
 //
-//  Full-screen article reader with chapter navigation
-//  Phase 1: Display only - TTS will be added in Phase 2
+//  Full-screen article reader with text-to-speech
+//  Features: Word highlighting, tap-to-seek, chapter navigation
 //
 
 import SwiftUI
@@ -15,13 +15,11 @@ struct ArticleReaderView: View {
 
     @Environment(\.dismiss) private var dismiss
 
+    @StateObject private var tts = TTSManager.shared
+
     @State private var currentChapterIndex: Int = 0
     @State private var showingChapterList = false
-    @State private var scrollOffset: CGFloat = 0
-
-    // TTS placeholders for Phase 2
-    @State private var isPlaying = false
-    @State private var playbackSpeed: Double = 1.0
+    @State private var showingSettings = false
 
     var currentChapter: ArticleChapter {
         guard article.chapters.indices.contains(currentChapterIndex) else {
@@ -37,42 +35,57 @@ struct ArticleReaderView: View {
 
             VStack(spacing: 0) {
                 // Content
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 20) {
-                        // Header
-                        articleHeader
+                ScrollViewReader { scrollProxy in
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 20) {
+                            // Header
+                            articleHeader
 
-                        // Chapter Title (if multiple chapters)
-                        if article.chapters.count > 1 {
-                            chapterHeader
-                        }
+                            // Chapter Title (if multiple chapters)
+                            if article.chapters.count > 1 {
+                                chapterHeader
+                            }
 
-                        // Article Content
-                        Text(currentChapter.content)
-                            .font(.system(size: 18, weight: .regular, design: .serif))
-                            .foregroundColor(.primary)
-                            .lineSpacing(8)
+                            // Article Content with highlighting
+                            HighlightedTextView(
+                                text: currentChapter.content,
+                                highlightRange: tts.currentWordRange,
+                                isPlaying: tts.isPlaying,
+                                onTapWord: { position in
+                                    tts.seek(to: position)
+                                    if !tts.isPlaying {
+                                        tts.play()
+                                    }
+                                }
+                            )
+                            .id("content")
                             .padding(.horizontal)
 
-                        // Chapter navigation at bottom
-                        if article.chapters.count > 1 {
-                            chapterNavigation
-                                .padding(.top, 20)
-                        }
+                            // Chapter navigation at bottom
+                            if article.chapters.count > 1 {
+                                chapterNavigation
+                                    .padding(.top, 20)
+                            }
 
-                        // Bottom padding for controls
-                        Color.clear.frame(height: 100)
+                            // Bottom padding for controls
+                            Color.clear.frame(height: 120)
+                        }
+                        .padding(.vertical)
                     }
-                    .padding(.vertical)
                 }
 
-                // Playback Controls (Phase 2 - currently placeholder)
+                // Playback Controls
                 playbackControls
             }
 
             // Chapter list overlay
             if showingChapterList {
                 chapterListOverlay
+            }
+
+            // Settings overlay
+            if showingSettings {
+                settingsOverlay
             }
         }
         .navigationBarTitleDisplayMode(.inline)
@@ -94,18 +107,47 @@ struct ArticleReaderView: View {
                     }
                 }
             }
+
+            ToolbarItem(placement: .topBarTrailing) {
+                Button(action: { showingSettings = true }) {
+                    Image(systemName: "gearshape")
+                        .foregroundColor(.white)
+                }
+            }
         }
         .onAppear {
             // Restore reading position
             currentChapterIndex = article.lastReadChapter
+            loadChapterForTTS()
+
+            // Handle chapter finished
+            tts.onChapterFinished = {
+                goToNextChapter()
+            }
         }
         .onDisappear {
-            // Save reading position
+            // Stop TTS and save position
+            tts.stop()
             articleManager.updateProgress(
                 articleId: article.id,
                 chapterIndex: currentChapterIndex,
-                position: 0 // Character position - will be more precise with TTS
+                position: tts.currentCharacterPosition
             )
+        }
+        .onChange(of: currentChapterIndex) { _ in
+            loadChapterForTTS()
+        }
+    }
+
+    // MARK: - TTS Helpers
+
+    private func loadChapterForTTS() {
+        tts.stop()
+        tts.loadText(currentChapter.content)
+
+        // Restore position if this is the saved chapter
+        if currentChapterIndex == article.lastReadChapter && article.lastReadPosition > 0 {
+            tts.seek(to: article.lastReadPosition)
         }
     }
 
@@ -161,7 +203,6 @@ struct ArticleReaderView: View {
 
     private var chapterNavigation: some View {
         HStack(spacing: 16) {
-            // Previous Chapter
             Button(action: { goToPreviousChapter() }) {
                 HStack {
                     Image(systemName: "chevron.left")
@@ -178,7 +219,6 @@ struct ArticleReaderView: View {
 
             Spacer()
 
-            // Next Chapter
             Button(action: { goToNextChapter() }) {
                 HStack {
                     Text("Next")
@@ -200,8 +240,18 @@ struct ArticleReaderView: View {
 
     private var playbackControls: some View {
         VStack(spacing: 0) {
-            Divider()
-                .background(Color.white.opacity(0.2))
+            // Progress bar
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Rectangle()
+                        .fill(Color.white.opacity(0.1))
+
+                    Rectangle()
+                        .fill(Color.royalPurple)
+                        .frame(width: geo.size.width * tts.progress)
+                }
+            }
+            .frame(height: 3)
 
             HStack(spacing: 20) {
                 // Chapter indicator
@@ -220,47 +270,43 @@ struct ArticleReaderView: View {
 
                 Spacer()
 
-                // Skip back
-                Button(action: { /* Phase 2: TTS skip back */ }) {
+                // Skip back (10 words)
+                Button(action: { tts.skipBackward(words: 15) }) {
                     Image(systemName: "gobackward.15")
                         .font(.system(size: 22))
-                        .foregroundColor(.secondary.opacity(0.5))
+                        .foregroundColor(.white.opacity(0.9))
                         .frame(width: 44, height: 44)
                 }
-                .disabled(true) // Phase 2
 
                 // Play/Pause
-                Button(action: { /* Phase 2: TTS play/pause */ }) {
-                    Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+                Button(action: { tts.togglePlayPause() }) {
+                    Image(systemName: tts.isPlaying ? "pause.fill" : "play.fill")
                         .font(.system(size: 28))
                         .foregroundColor(.white)
                         .frame(width: 56, height: 56)
-                        .background(Circle().fill(Color.royalPurple.opacity(0.5)))
+                        .background(Circle().fill(Color.royalPurple))
                         .overlay(Circle().stroke(Color.white.opacity(0.3), lineWidth: 1))
                 }
-                .disabled(true) // Phase 2
 
-                // Skip forward
-                Button(action: { /* Phase 2: TTS skip forward */ }) {
+                // Skip forward (30 words)
+                Button(action: { tts.skipForward(words: 30) }) {
                     Image(systemName: "goforward.30")
                         .font(.system(size: 22))
-                        .foregroundColor(.secondary.opacity(0.5))
+                        .foregroundColor(.white.opacity(0.9))
                         .frame(width: 44, height: 44)
                 }
-                .disabled(true) // Phase 2
 
                 Spacer()
 
                 // Speed control
-                Button(action: { /* Phase 2: cycle speed */ }) {
-                    Text("\(String(format: "%.1f", playbackSpeed))x")
+                Button(action: { tts.cycleSpeed() }) {
+                    Text("\(String(format: "%.2f", tts.playbackSpeed))x")
                         .font(.system(size: 12, weight: .bold, design: .monospaced))
-                        .foregroundColor(.secondary.opacity(0.5))
+                        .foregroundColor(tts.playbackSpeed == 1.0 ? .white.opacity(0.7) : .green)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 4)
-                        .background(Capsule().fill(Color.white.opacity(0.1)))
+                        .background(Capsule().fill(Color.white.opacity(0.2)))
                 }
-                .disabled(true) // Phase 2
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 12)
@@ -272,14 +318,11 @@ struct ArticleReaderView: View {
 
     private var chapterListOverlay: some View {
         ZStack {
-            // Dimmed background
             Color.black.opacity(0.5)
                 .ignoresSafeArea()
                 .onTapGesture { showingChapterList = false }
 
-            // Chapter list
             VStack(spacing: 0) {
-                // Header
                 HStack {
                     Text("Chapters")
                         .font(.headline)
@@ -294,7 +337,6 @@ struct ArticleReaderView: View {
 
                 Divider()
 
-                // Chapter list
                 ScrollView {
                     VStack(spacing: 8) {
                         ForEach(Array(article.chapters.enumerated()), id: \.element.id) { index, chapter in
@@ -352,10 +394,105 @@ struct ArticleReaderView: View {
         .animation(.easeInOut(duration: 0.2), value: showingChapterList)
     }
 
+    // MARK: - Settings Overlay
+
+    private var settingsOverlay: some View {
+        ZStack {
+            Color.black.opacity(0.5)
+                .ignoresSafeArea()
+                .onTapGesture { showingSettings = false }
+
+            VStack(spacing: 0) {
+                HStack {
+                    Text("Reader Settings")
+                        .font(.headline)
+                    Spacer()
+                    Button(action: { showingSettings = false }) {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 24))
+                            .foregroundColor(.secondary)
+                    }
+                }
+                .padding()
+
+                Divider()
+
+                VStack(spacing: 20) {
+                    // Voice selection
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Voice")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundColor(.secondary)
+
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 8) {
+                                ForEach(TTSManager.availableVoices.prefix(6), id: \.identifier) { voice in
+                                    Button(action: {
+                                        tts.selectedVoiceIdentifier = voice.identifier
+                                    }) {
+                                        VStack(spacing: 4) {
+                                            Text(voice.name)
+                                                .font(.system(size: 12, weight: .medium))
+                                                .lineLimit(1)
+
+                                            if voice.quality == .enhanced {
+                                                Text("Enhanced")
+                                                    .font(.system(size: 9))
+                                                    .foregroundColor(.green)
+                                            }
+                                        }
+                                        .padding(.horizontal, 12)
+                                        .padding(.vertical, 8)
+                                        .background(
+                                            tts.selectedVoiceIdentifier == voice.identifier
+                                                ? Color.royalPurple
+                                                : Color.white.opacity(0.1)
+                                        )
+                                        .foregroundColor(.white)
+                                        .cornerRadius(8)
+                                    }
+                                }
+                            }
+                            .padding(.horizontal)
+                        }
+                    }
+
+                    // Speed slider
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text("Speed")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundColor(.secondary)
+                            Spacer()
+                            Text("\(String(format: "%.2f", tts.playbackSpeed))x")
+                                .font(.system(size: 14, weight: .bold, design: .monospaced))
+                                .foregroundColor(.royalPurple)
+                        }
+
+                        Slider(value: Binding(
+                            get: { Double(tts.playbackSpeed) },
+                            set: { tts.playbackSpeed = Float($0) }
+                        ), in: 0.5...2.0, step: 0.25)
+                        .tint(.royalPurple)
+                    }
+                    .padding(.horizontal)
+                }
+                .padding(.vertical, 20)
+            }
+            .frame(maxHeight: 300)
+            .background(.ultraThinMaterial)
+            .cornerRadius(20)
+            .padding(.horizontal, 20)
+        }
+        .transition(.opacity)
+        .animation(.easeInOut(duration: 0.2), value: showingSettings)
+    }
+
     // MARK: - Navigation Helpers
 
     private func goToPreviousChapter() {
         if currentChapterIndex > 0 {
+            tts.stop()
             withAnimation {
                 currentChapterIndex -= 1
             }
@@ -364,9 +501,135 @@ struct ArticleReaderView: View {
 
     private func goToNextChapter() {
         if currentChapterIndex < article.chapters.count - 1 {
+            tts.stop()
             withAnimation {
                 currentChapterIndex += 1
             }
+            // Auto-play next chapter
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                tts.play()
+            }
         }
+    }
+}
+
+// MARK: - Highlighted Text View
+
+struct HighlightedTextView: View {
+    let text: String
+    let highlightRange: NSRange
+    let isPlaying: Bool
+    let onTapWord: (Int) -> Void
+
+    var body: some View {
+        // Split text into words with positions for tap-to-seek
+        let words = splitTextIntoWords(text)
+
+        WrappingHStack(alignment: .leading, spacing: 4, lineSpacing: 8) {
+            ForEach(words) { word in
+                Text(word.text)
+                    .font(.system(size: 18, weight: .regular, design: .serif))
+                    .foregroundColor(isWordHighlighted(word) ? .white : .primary)
+                    .padding(.horizontal, isWordHighlighted(word) ? 2 : 0)
+                    .padding(.vertical, isWordHighlighted(word) ? 1 : 0)
+                    .background(
+                        isWordHighlighted(word)
+                            ? Color.royalPurple
+                            : Color.clear
+                    )
+                    .cornerRadius(4)
+                    .onTapGesture {
+                        onTapWord(word.startPosition)
+                    }
+            }
+        }
+    }
+
+    private func isWordHighlighted(_ word: WordToken) -> Bool {
+        guard isPlaying else { return false }
+        let wordRange = NSRange(location: word.startPosition, length: word.text.count)
+        return NSIntersectionRange(wordRange, highlightRange).length > 0
+    }
+
+    private func splitTextIntoWords(_ text: String) -> [WordToken] {
+        var words: [WordToken] = []
+        var currentPosition = 0
+
+        let components = text.components(separatedBy: .whitespaces)
+        for component in components {
+            if !component.isEmpty {
+                words.append(WordToken(
+                    text: component,
+                    startPosition: currentPosition
+                ))
+            }
+            currentPosition += component.count + 1 // +1 for the space
+        }
+
+        return words
+    }
+}
+
+struct WordToken: Identifiable {
+    let id = UUID()
+    let text: String
+    let startPosition: Int
+}
+
+// MARK: - Wrapping HStack (for text flow)
+
+struct WrappingHStack<Content: View>: View {
+    let alignment: HorizontalAlignment
+    let spacing: CGFloat
+    let lineSpacing: CGFloat
+    let content: () -> Content
+
+    init(
+        alignment: HorizontalAlignment = .leading,
+        spacing: CGFloat = 8,
+        lineSpacing: CGFloat = 4,
+        @ViewBuilder content: @escaping () -> Content
+    ) {
+        self.alignment = alignment
+        self.spacing = spacing
+        self.lineSpacing = lineSpacing
+        self.content = content
+    }
+
+    var body: some View {
+        GeometryReader { geometry in
+            self.generateContent(in: geometry)
+        }
+    }
+
+    private func generateContent(in geometry: GeometryProxy) -> some View {
+        var width = CGFloat.zero
+        var height = CGFloat.zero
+
+        return ZStack(alignment: .topLeading) {
+            content()
+                .fixedSize()
+                .alignmentGuide(.leading) { dimension in
+                    if abs(width - dimension.width) > geometry.size.width {
+                        width = 0
+                        height -= dimension.height + lineSpacing
+                    }
+                    let result = width
+                    if dimension.width == 0 { // Last item
+                        width = 0
+                    } else {
+                        width -= dimension.width + spacing
+                    }
+                    return result
+                }
+                .alignmentGuide(.top) { _ in
+                    let result = height
+                    if width == 0 { // New line
+                        height = 0
+                    }
+                    return result
+                }
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
     }
 }
