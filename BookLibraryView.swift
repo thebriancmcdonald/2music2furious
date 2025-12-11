@@ -45,6 +45,10 @@ struct BookLibraryView: View {
                                 Button(role: .destructive) { bookManager.removeBook(book) } label: { Label("Delete", systemImage: "trash") }
                                     .tint(.royalPurple)
                             }
+                            .swipeActions(edge: .leading) {
+                                Button { shareBook(book) } label: { Label("Share", systemImage: "square.and.arrow.up") }
+                                    .tint(.royalPurple)
+                            }
                         }
                     }
                     .listStyle(.plain)
@@ -129,6 +133,33 @@ struct BookLibraryView: View {
         toastMessage = message
         withAnimation { showingToast = true }
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { withAnimation { showingToast = false } }
+    }
+
+    private func shareBook(_ book: Book) {
+        var shareItems: [Any] = []
+
+        // Share LibriVox URL if available, otherwise share title info
+        if let librivoxId = book.librivoxId {
+            let librivoxURL = URL(string: "https://librivox.org/search?primary_key=\(librivoxId)&search_category=audiobook&search_page=1&search_form=get_results")
+            if let url = librivoxURL {
+                shareItems.append(url)
+            }
+        }
+
+        let shareText = "Check out \"\(book.displayTitle)\" by \(book.displayAuthor)"
+        shareItems.append(shareText)
+
+        let activityVC = UIActivityViewController(activityItems: shareItems, applicationActivities: nil)
+
+        if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+           let rootVC = windowScene.windows.first?.rootViewController {
+            if let popover = activityVC.popoverPresentationController {
+                popover.sourceView = rootVC.view
+                popover.sourceRect = CGRect(x: rootVC.view.bounds.midX, y: rootVC.view.bounds.midY, width: 0, height: 0)
+                popover.permittedArrowDirections = []
+            }
+            rootVC.present(activityVC, animated: true)
+        }
     }
 }
 
@@ -290,12 +321,47 @@ struct LocalBookDetailView: View {
         }
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button(action: { shareBook() }) {
+                    Image(systemName: "square.and.arrow.up")
+                        .foregroundColor(.white)
+                }
+            }
+        }
     }
-    
+
     private func showToast(_ message: String) {
         toastMessage = message
         withAnimation { showingToast = true }
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { withAnimation { showingToast = false } }
+    }
+
+    private func shareBook() {
+        var shareItems: [Any] = []
+
+        // Share LibriVox URL if available
+        if let librivoxId = book.librivoxId {
+            let librivoxURL = URL(string: "https://librivox.org/search?primary_key=\(librivoxId)&search_category=audiobook&search_page=1&search_form=get_results")
+            if let url = librivoxURL {
+                shareItems.append(url)
+            }
+        }
+
+        let shareText = "Check out \"\(book.displayTitle)\" by \(book.displayAuthor)"
+        shareItems.append(shareText)
+
+        let activityVC = UIActivityViewController(activityItems: shareItems, applicationActivities: nil)
+
+        if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+           let rootVC = windowScene.windows.first?.rootViewController {
+            if let popover = activityVC.popoverPresentationController {
+                popover.sourceView = rootVC.view
+                popover.sourceRect = CGRect(x: rootVC.view.bounds.midX, y: 100, width: 0, height: 0)
+                popover.permittedArrowDirections = .up
+            }
+            rootVC.present(activityVC, animated: true)
+        }
     }
 }
 

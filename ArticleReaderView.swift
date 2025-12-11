@@ -110,9 +110,15 @@ struct ArticleReaderView: View {
             }
 
             ToolbarItem(placement: .topBarTrailing) {
-                Button(action: { showingSettings = true }) {
-                    Image(systemName: "gearshape")
-                        .foregroundColor(.white)
+                HStack(spacing: 16) {
+                    Button(action: { shareArticle() }) {
+                        Image(systemName: "square.and.arrow.up")
+                            .foregroundColor(.white)
+                    }
+                    Button(action: { showingSettings = true }) {
+                        Image(systemName: "gearshape")
+                            .foregroundColor(.white)
+                    }
                 }
             }
         }
@@ -510,6 +516,33 @@ struct ArticleReaderView: View {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                 tts.play()
             }
+        }
+    }
+
+    private func shareArticle() {
+        var shareItems: [Any] = []
+
+        // Share URL if available, otherwise share title and excerpt
+        if let url = article.sourceURL {
+            shareItems.append(url)
+            shareItems.append("\(article.title)")
+        } else {
+            // Share as text
+            let excerpt = article.chapters.first?.content.prefix(500) ?? ""
+            let shareText = "\(article.title)\n\n\(excerpt)..."
+            shareItems.append(shareText)
+        }
+
+        let activityVC = UIActivityViewController(activityItems: shareItems, applicationActivities: nil)
+
+        if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+           let rootVC = windowScene.windows.first?.rootViewController {
+            if let popover = activityVC.popoverPresentationController {
+                popover.sourceView = rootVC.view
+                popover.sourceRect = CGRect(x: rootVC.view.bounds.midX, y: 100, width: 0, height: 0)
+                popover.permittedArrowDirections = .up
+            }
+            rootVC.present(activityVC, animated: true)
         }
     }
 }

@@ -68,6 +68,14 @@ struct ArticleLibraryView: View {
                                 }
                                 .tint(.royalPurple)
                             }
+                            .swipeActions(edge: .leading) {
+                                Button {
+                                    shareArticle(article)
+                                } label: {
+                                    Label("Share", systemImage: "square.and.arrow.up")
+                                }
+                                .tint(.royalPurple)
+                            }
                         }
                     }
                     .listStyle(.plain)
@@ -258,6 +266,34 @@ struct ArticleLibraryView: View {
             withAnimation { showingToast = false }
         }
     }
+
+    private func shareArticle(_ article: Article) {
+        var shareItems: [Any] = []
+
+        // Share URL if available, otherwise share title and excerpt
+        if let url = article.sourceURL {
+            shareItems.append(url)
+            shareItems.append("\(article.title)")
+        } else {
+            // Share as text
+            let excerpt = article.chapters.first?.content.prefix(500) ?? ""
+            let shareText = "\(article.title)\n\n\(excerpt)..."
+            shareItems.append(shareText)
+        }
+
+        let activityVC = UIActivityViewController(activityItems: shareItems, applicationActivities: nil)
+
+        if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+           let rootVC = windowScene.windows.first?.rootViewController {
+            // Handle iPad popover
+            if let popover = activityVC.popoverPresentationController {
+                popover.sourceView = rootVC.view
+                popover.sourceRect = CGRect(x: rootVC.view.bounds.midX, y: rootVC.view.bounds.midY, width: 0, height: 0)
+                popover.permittedArrowDirections = []
+            }
+            rootVC.present(activityVC, animated: true)
+        }
+    }
 }
 
 // MARK: - Glass Article Row
@@ -348,7 +384,7 @@ struct AddURLSheet: View {
                         Text("Article URL")
                             .font(.headline)
 
-                        TextField("https://example.com/article", text: $urlInput)
+                        TextField("", text: $urlInput, prompt: Text("example.com/article").foregroundColor(.secondary))
                             .textFieldStyle(.plain)
                             .keyboardType(.URL)
                             .textContentType(.URL)
