@@ -7,6 +7,7 @@
 //
 
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct ArticleLibraryView: View {
     @ObservedObject var articleManager: ArticleManager
@@ -15,8 +16,11 @@ struct ArticleLibraryView: View {
 
     @State private var showingAddURL = false
     @State private var showingAddText = false
+    @State private var showingFilePicker = false
     @State private var showingToast = false
     @State private var toastMessage = ""
+    @State private var toastIcon = "checkmark.circle.fill"
+    @State private var isImporting = false
 
     // For URL input sheet
     @State private var urlInput = ""
@@ -35,9 +39,9 @@ struct ArticleLibraryView: View {
                     GlassEmptyStateView(
                         icon: "doc.text",
                         title: "No Articles Yet",
-                        subtitle: "Add articles from the web or paste text\nto listen while you work.",
+                        subtitle: "Import files, add URLs, or paste text\nto listen while you work.",
                         actions: [
-                            (icon: "link", title: "Add URL", action: { showingAddURL = true }),
+                            (icon: "doc.badge.plus", title: "Import File", action: { showingFilePicker = true }),
                             (icon: "doc.on.clipboard", title: "Paste Text", action: { showingAddText = true })
                         ]
                     )
@@ -74,12 +78,29 @@ struct ArticleLibraryView: View {
                 if showingToast {
                     VStack {
                         Spacer()
-                        GlassToastView(message: toastMessage)
+                        GlassToastView(message: toastMessage, icon: toastIcon, iconColor: toastIcon.contains("exclamation") ? .orange : .royalPurple)
                             .padding(.bottom, 20)
                     }
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                     .animation(.spring(), value: showingToast)
                     .zIndex(100)
+                }
+
+                // Loading overlay
+                if isImporting {
+                    Color.black.opacity(0.3)
+                        .ignoresSafeArea()
+                    VStack(spacing: 16) {
+                        ProgressView()
+                            .scaleEffect(1.5)
+                            .tint(.white)
+                        Text("Importing...")
+                            .font(.headline)
+                            .foregroundColor(.white)
+                    }
+                    .padding(30)
+                    .background(.ultraThinMaterial)
+                    .cornerRadius(20)
                 }
             }
             .navigationTitle("Articles")
@@ -89,6 +110,11 @@ struct ArticleLibraryView: View {
                     GlassCloseButton(action: dismiss)
                 }
                 ToolbarItemGroup(placement: .primaryAction) {
+                    Button { showingFilePicker = true } label: {
+                        Image(systemName: "doc.badge.plus")
+                            .foregroundColor(.white)
+                    }
+
                     Button { showingAddURL = true } label: {
                         Image(systemName: "link")
                             .foregroundColor(.white)
@@ -116,9 +142,49 @@ struct ArticleLibraryView: View {
                     onCancel: { showingAddText = false }
                 )
             }
+            .fileImporter(
+                isPresented: $showingFilePicker,
+                allowedContentTypes: [.pdf, .html, .plainText, UTType(filenameExtension: "epub") ?? .data],
+                allowsMultipleSelection: false
+            ) { result in
+                handleFileImport(result: result)
+            }
         }
         .accentColor(.royalPurple)
         .tint(.royalPurple)
+    }
+
+    // MARK: - File Import
+
+    private func handleFileImport(result: Result<[URL], Error>) {
+        switch result {
+        case .success(let urls):
+            guard let url = urls.first else { return }
+            importFile(from: url)
+        case .failure(let error):
+            showToast("Import failed: \(error.localizedDescription)", icon: "exclamationmark.triangle.fill")
+        }
+    }
+
+    private func importFile(from url: URL) {
+        isImporting = true
+
+        Task {
+            do {
+                let article = try await DocumentImporter.importDocument(from: url)
+
+                await MainActor.run {
+                    articleManager.addArticle(article)
+                    isImporting = false
+                    showToast("\"\(article.title)\" imported!")
+                }
+            } catch {
+                await MainActor.run {
+                    isImporting = false
+                    showToast("Import failed: \(error.localizedDescription)", icon: "exclamationmark.triangle.fill")
+                }
+            }
+        }
     }
 
     // MARK: - Actions
@@ -187,10 +253,11 @@ struct ArticleLibraryView: View {
         showToast("Article added!")
     }
 
-    private func showToast(_ message: String) {
+    private func showToast(_ message: String, icon: String = "checkmark.circle.fill") {
         toastMessage = message
+        toastIcon = icon
         withAnimation { showingToast = true }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
             withAnimation { showingToast = false }
         }
     }
@@ -258,6 +325,8 @@ struct GlassArticleRow: View {
             return "book.closed"
         case "pdf", "uploaded pdf":
             return "doc.richtext"
+        case "uploaded html", "uploaded text":
+            return "doc.plaintext"
         default:
             return "globe"
         }
