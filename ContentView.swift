@@ -23,15 +23,17 @@ struct ContentView: View {
     @StateObject private var podcastSearch = PodcastSearchManager()
     @StateObject private var downloadManager = DownloadManager.shared
     @StateObject private var radioAPI = RadioBrowserAPI()
-    
+    @StateObject private var articleManager = ArticleManager.shared
+
     // MARK: - State for UI
-    
+
     @State private var showingMusicLibrary = false
     @State private var showingBookLibrary = false
     @State private var showingPodcastSearch = false
     @State private var showingRadioSearch = false
     @State private var showingMusicQueue = false
     @State private var showingSpeechQueue = false
+    @State private var showingArticleLibrary = false
     
     // Feature Toggles
     @State private var backgroundModeEnabled = false
@@ -83,6 +85,9 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showingSpeechQueue) {
             QueueView(player: speechPlayer, title: "Speech Queue", dismiss: { showingSpeechQueue = false })
+        }
+        .sheet(isPresented: $showingArticleLibrary) {
+            ArticleLibraryView(articleManager: articleManager, speechPlayer: speechPlayer, dismiss: { showingArticleLibrary = false })
         }
         // MARK: - Lifecycle
         .onAppear {
@@ -285,8 +290,8 @@ struct ContentView: View {
                     Button(action: { showingPodcastSearch = true }) { glassButtonStyle(icon: "mic.fill", text: "Podcasts") }
                     
                     Button(action: { showingBookLibrary = true }) { glassButtonStyle(icon: "book.fill", text: "Audiobooks") }
-                    
-                    Button(action: { print("Open Text Reader") }) { glassButtonStyle(icon: "doc.text.fill", text: "Text") }
+
+                    Button(action: { showingArticleLibrary = true }) { glassButtonStyle(icon: "doc.text.fill", text: "Text") }
                 }
             }
             
