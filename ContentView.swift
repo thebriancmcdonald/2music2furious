@@ -3,7 +3,7 @@
 //  2 Music 2 Furious - MILESTONE 11
 //
 //  Main app view with dual audio players
-//  UPDATES: Optimized SeekBarView, uses SharedComponents
+//  UPDATES: Bottom row buttons right-aligned, Text button icon changed to document
 //
 
 import SwiftUI
@@ -158,11 +158,27 @@ struct ContentView: View {
     private var musicPanel: some View {
         HStack(spacing: 12) {
             VStack(spacing: 0) {
-                // 1. Label
+                // 1. Label & Header Controls
                 HStack {
-                    Image(systemName: "music.note").font(.system(size: 12)).foregroundStyle(.white.opacity(0.8))
-                    Text("MUSIC").font(.system(size: 10, weight: .bold, design: .rounded)).foregroundStyle(.white.opacity(0.8))
+                    HStack(spacing: 6) {
+                        Image(systemName: "music.note").font(.system(size: 12)).foregroundStyle(.white.opacity(0.8))
+                        Text("MUSIC").font(.system(size: 10, weight: .bold, design: .rounded)).foregroundStyle(.white.opacity(0.8))
+                    }
+                    
                     Spacer()
+                    
+                    // Quiet Button
+                    Button(action: { backgroundModeEnabled.toggle() }) {
+                        HStack(spacing: 4) {
+                            Image(systemName: backgroundModeEnabled ? "speaker.zzz.fill" : "speaker.wave.3.fill")
+                            Text("QUIET").font(.system(size: 9, weight: .bold))
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(backgroundModeEnabled ? Color.deepResumePurple : Color.black.opacity(0.3))
+                        .clipShape(Capsule())
+                        .overlay(Capsule().stroke(backgroundModeEnabled ? Color.royalPurple : Color.white.opacity(0.2), lineWidth: 1))
+                    }.foregroundColor(.white)
                 }
                 
                 Spacer()
@@ -189,28 +205,16 @@ struct ContentView: View {
                 
                 Spacer()
                 
-                // 6. Action Buttons
+                // 6. Action Buttons (Right Aligned)
                 HStack(spacing: 8) {
+                    Spacer()
+                    
                     Button(action: {
                         if musicLibrary.authorizationStatus == .notDetermined { musicLibrary.requestAuthorization() }
                         showingMusicLibrary = true
                     }) { glassButtonStyle(icon: "music.note.list", text: "Library") }
                     
                     Button(action: { showingRadioSearch = true }) { glassButtonStyle(icon: "antenna.radiowaves.left.and.right", text: "Radio") }
-                    
-                    Spacer()
-                    
-                    Button(action: { backgroundModeEnabled.toggle() }) {
-                        HStack(spacing: 4) {
-                            Image(systemName: backgroundModeEnabled ? "speaker.zzz.fill" : "speaker.wave.3.fill")
-                            Text("QUIET").font(.system(size: 10, weight: .bold))
-                        }
-                        .padding(6)
-                        // UPDATED: Uses deepResumePurple
-                        .background(backgroundModeEnabled ? Color.deepResumePurple : Color.black.opacity(0.4))
-                        .clipShape(Capsule())
-                        .overlay(Capsule().stroke(backgroundModeEnabled ? Color.royalPurple : Color.white.opacity(0.3), lineWidth: 1))
-                    }.foregroundColor(.white)
                 }
             }
             
@@ -227,11 +231,27 @@ struct ContentView: View {
     private var speechPanel: some View {
         HStack(spacing: 12) {
             VStack(spacing: 0) {
-                // 1. Label
+                // 1. Label & Header Controls
                 HStack {
-                    Image(systemName: "mic.fill").font(.system(size: 12)).foregroundStyle(.white.opacity(0.8))
-                    Text("SPEECH").font(.system(size: 10, weight: .bold, design: .rounded)).foregroundStyle(.white.opacity(0.8))
+                    HStack(spacing: 6) {
+                        Image(systemName: "mic.fill").font(.system(size: 12)).foregroundStyle(.white.opacity(0.8))
+                        Text("SPEECH").font(.system(size: 10, weight: .bold, design: .rounded)).foregroundStyle(.white.opacity(0.8))
+                    }
+                    
                     Spacer()
+                    
+                    // Boost Button
+                    Button(action: { voiceBoostEnabled.toggle() }) {
+                        HStack(spacing: 4) {
+                            Image(systemName: voiceBoostEnabled ? "waveform.path.ecg" : "waveform")
+                            Text("BOOST").font(.system(size: 9, weight: .bold))
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(voiceBoostEnabled ? Color.deepResumePurple : Color.black.opacity(0.3))
+                        .clipShape(Capsule())
+                        .overlay(Capsule().stroke(voiceBoostEnabled ? Color.royalPurple : Color.white.opacity(0.2), lineWidth: 1))
+                    }.foregroundColor(.white)
                 }
                 
                 Spacer()
@@ -258,24 +278,15 @@ struct ContentView: View {
                 
                 Spacer()
                 
-                // 6. Action Buttons
+                // 6. Action Buttons (Right Aligned)
                 HStack(spacing: 8) {
-                    Button(action: { showingPodcastSearch = true }) { glassButtonStyle(icon: "mic.fill", text: "Podcasts") }
-                    Button(action: { showingBookLibrary = true }) { glassButtonStyle(icon: "book.fill", text: "Books") }
-                    
                     Spacer()
                     
-                    Button(action: { voiceBoostEnabled.toggle() }) {
-                        HStack(spacing: 4) {
-                            Image(systemName: voiceBoostEnabled ? "waveform.path.ecg" : "waveform")
-                            Text("BOOST").font(.system(size: 10, weight: .bold))
-                        }
-                        .padding(6)
-                        // UPDATED: Uses deepResumePurple
-                        .background(voiceBoostEnabled ? Color.deepResumePurple : Color.black.opacity(0.4))
-                        .clipShape(Capsule())
-                        .overlay(Capsule().stroke(voiceBoostEnabled ? Color.royalPurple : Color.white.opacity(0.3), lineWidth: 1))
-                    }.foregroundColor(.white)
+                    Button(action: { showingPodcastSearch = true }) { glassButtonStyle(icon: "mic.fill", text: "Podcasts") }
+                    
+                    Button(action: { showingBookLibrary = true }) { glassButtonStyle(icon: "book.fill", text: "Audiobooks") }
+                    
+                    Button(action: { print("Open Text Reader") }) { glassButtonStyle(icon: "doc.text.fill", text: "Text") }
                 }
             }
             
