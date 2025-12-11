@@ -439,8 +439,8 @@ enum MiniZip {
 
             if sig == 0x04034b50 {
                 // Parse local file header
-                let minVersion = data.subdata(in: offset+4..<offset+6).withUnsafeBytes { $0.load(as: UInt16.self) }
-                let flags = data.subdata(in: offset+6..<offset+8).withUnsafeBytes { $0.load(as: UInt16.self) }
+                _ = data.subdata(in: offset+4..<offset+6).withUnsafeBytes { $0.load(as: UInt16.self) } // minVersion
+                _ = data.subdata(in: offset+6..<offset+8).withUnsafeBytes { $0.load(as: UInt16.self) } // flags
                 let compressionMethod = data.subdata(in: offset+8..<offset+10).withUnsafeBytes { $0.load(as: UInt16.self) }
                 let compressedSize = data.subdata(in: offset+18..<offset+22).withUnsafeBytes { $0.load(as: UInt32.self) }
                 let uncompressedSize = data.subdata(in: offset+22..<offset+26).withUnsafeBytes { $0.load(as: UInt32.self) }
@@ -695,9 +695,8 @@ class WebArticleExtractor {
 
         // If no container found, use body
         if content == html {
-            if let bodyMatch = html.range(of: "<body[^>]*>([\\s\\S]*?)</body>", options: .regularExpression),
-               let bodyRange = Range(bodyMatch, in: html) {
-                content = String(html[bodyRange])
+            if let bodyMatch = html.range(of: "<body[^>]*>([\\s\\S]*?)</body>", options: .regularExpression) {
+                content = String(html[bodyMatch])
             }
         }
 
