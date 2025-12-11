@@ -41,8 +41,9 @@ struct ArticleLibraryView: View {
                         title: "No Articles Yet",
                         subtitle: "Import files, add URLs, or paste text\nto listen while you work.",
                         actions: [
-                            (icon: "doc.badge.plus", title: "Import File", action: { showingFilePicker = true }),
-                            (icon: "doc.on.clipboard", title: "Paste Text", action: { showingAddText = true })
+                            (icon: "doc.badge.plus", title: "Import", action: { showingFilePicker = true }),
+                            (icon: "link", title: "URL", action: { showingAddURL = true }),
+                            (icon: "doc.on.clipboard", title: "Paste", action: { showingAddText = true })
                         ]
                     )
                 } else {
