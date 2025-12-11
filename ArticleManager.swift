@@ -129,6 +129,43 @@ class ArticleManager: ObservableObject {
             self.userDefaults = UserDefaults.standard
         }
         loadArticles()
+        migrateFromStandardUserDefaultsIfNeeded()
+    }
+
+    /// Migrate articles from standard UserDefaults to App Group (one-time migration)
+    private func migrateFromStandardUserDefaultsIfNeeded() {
+        let standardDefaults = UserDefaults.standard
+        let migrationKey = "articlesMigratedToAppGroup"
+
+        // Skip if already migrated or if we're using standard defaults anyway
+        guard !standardDefaults.bool(forKey: migrationKey),
+              userDefaults != standardDefaults else { return }
+
+        // Check for old articles in standard UserDefaults
+        if let oldData = standardDefaults.data(forKey: articlesKey),
+           let oldArticles = try? JSONDecoder().decode([Article].self, from: oldData),
+           !oldArticles.isEmpty {
+            print("ArticleManager: Migrating \(oldArticles.count) articles to App Group storage")
+
+            // Merge old articles with any existing (avoid duplicates)
+            for oldArticle in oldArticles {
+                if !articles.contains(where: { $0.id == oldArticle.id }) {
+                    articles.append(oldArticle)
+                }
+            }
+
+            // Sort by date (newest first)
+            articles.sort { $0.dateAdded > $1.dateAdded }
+
+            // Save to App Group
+            saveArticles()
+
+            // Clear old storage
+            standardDefaults.removeObject(forKey: articlesKey)
+        }
+
+        // Mark migration complete
+        standardDefaults.set(true, forKey: migrationKey)
     }
 
     /// Call this when the app becomes active to check for articles added via Share Extension
