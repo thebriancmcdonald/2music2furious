@@ -340,14 +340,15 @@ struct GlassActionButton: View {
                 }
             }
             .font(.system(size: 16, weight: .semibold))
-            .foregroundColor(.white)
+            .foregroundColor(isLoading || isDisabled ? .white.opacity(0.7) : .white)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 16)
-            .background(isLoading || isDisabled ? Color.gray : color)
+            .background(isLoading || isDisabled ? Color.secondary.opacity(0.3) : color)
             .cornerRadius(16)
-            .shadow(color: color.opacity(0.3), radius: 10, x: 0, y: 5)
+            .shadow(color: (isLoading || isDisabled) ? Color.clear : color.opacity(0.3), radius: 10, x: 0, y: 5)
         }
         .disabled(isLoading || isDisabled)
+        .opacity(isLoading || isDisabled ? 0.7 : 1.0)
     }
 }
 

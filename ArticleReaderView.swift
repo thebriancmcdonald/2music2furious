@@ -522,20 +522,36 @@ struct HighlightedTextView: View {
     let isPlaying: Bool
     let onTapWord: (Int) -> Void
 
+    @State private var textHeight: CGFloat = 0
+
     var body: some View {
         // Use attributed string for highlighting
         Text(attributedText)
             .font(.system(size: 18, weight: .regular, design: .serif))
             .lineSpacing(8)
-            .textSelection(.enabled)
-            .onTapGesture { location in
-                // For tap-to-seek, we estimate position based on tap
-                // This is approximate but functional
-            }
-            .overlay(
-                // Invisible tap targets for each word
-                WordTapOverlay(text: text, onTapWord: onTapWord)
+            .background(
+                GeometryReader { geo in
+                    Color.clear.onAppear {
+                        textHeight = geo.size.height
+                    }
+                    .onChange(of: text) { _ in
+                        textHeight = geo.size.height
+                    }
+                }
             )
+            .contentShape(Rectangle())
+            .onTapGesture { location in
+                // Estimate character position based on tap location
+                guard textHeight > 0 else { return }
+
+                // Calculate approximate position as percentage through text
+                let tapPercent = max(0, min(1, location.y / textHeight))
+                let estimatedPosition = Int(Double(text.count) * tapPercent)
+
+                // Snap to nearest word boundary
+                let position = findNearestWordStart(in: text, near: estimatedPosition)
+                onTapWord(position)
+            }
     }
 
     private var attributedText: AttributedString {
@@ -558,23 +574,17 @@ struct HighlightedTextView: View {
 
         return attributed
     }
-}
 
-// Overlay to handle word taps
-struct WordTapOverlay: View {
-    let text: String
-    let onTapWord: (Int) -> Void
+    private func findNearestWordStart(in text: String, near position: Int) -> Int {
+        let nsText = text as NSString
+        var pos = min(position, nsText.length - 1)
+        guard pos >= 0 else { return 0 }
 
-    var body: some View {
-        // Simple approach: one big tap gesture that estimates position
-        Color.clear
-            .contentShape(Rectangle())
-            .onTapGesture { /* Tap handled by parent */ }
+        // Move backward to find word start
+        while pos > 0 && !CharacterSet.whitespacesAndNewlines.contains(Unicode.Scalar(nsText.character(at: pos - 1))!) {
+            pos -= 1
+        }
+
+        return pos
     }
-}
-
-struct WordToken: Identifiable {
-    let id = UUID()
-    let text: String
-    let startPosition: Int
 }

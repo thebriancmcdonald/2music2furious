@@ -354,12 +354,14 @@ struct AddURLSheet: View {
                             .textContentType(.URL)
                             .autocapitalization(.none)
                             .disableAutocorrection(true)
+                            .foregroundColor(.primary)
+                            .tint(.royalPurple)
                             .padding()
                             .background(.ultraThinMaterial)
                             .cornerRadius(12)
                             .overlay(
                                 RoundedRectangle(cornerRadius: 12)
-                                    .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                                    .stroke(Color.royalPurple.opacity(0.5), lineWidth: 1)
                             )
                     }
 

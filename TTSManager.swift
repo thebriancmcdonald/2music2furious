@@ -38,6 +38,9 @@ class TTSManager: NSObject, ObservableObject {
     private(set) var currentText: String = ""
     private(set) var currentCharacterPosition: Int = 0
 
+    // Store the starting position for the current utterance to correctly calculate word ranges
+    private var utteranceStartPosition: Int = 0
+
     // Callbacks
     var onWordSpoken: ((NSRange) -> Void)?
     var onFinished: (() -> Void)?
@@ -193,6 +196,7 @@ class TTSManager: NSObject, ObservableObject {
         }
 
         currentCharacterPosition = position
+        utteranceStartPosition = position  // Store starting position for word range calculations
 
         // Create utterance
         let newUtterance = AVSpeechUtterance(string: textToSpeak)
@@ -323,8 +327,9 @@ extension TTSManager: AVSpeechSynthesizerDelegate {
                            utterance: AVSpeechUtterance) {
         DispatchQueue.main.async {
             // Adjust range to account for our starting position
+            // Use utteranceStartPosition (fixed) instead of currentCharacterPosition (which changes)
             let adjustedRange = NSRange(
-                location: self.currentCharacterPosition + characterRange.location,
+                location: self.utteranceStartPosition + characterRange.location,
                 length: characterRange.length
             )
 
