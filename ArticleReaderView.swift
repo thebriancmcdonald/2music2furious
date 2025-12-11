@@ -7,6 +7,7 @@
 //
 
 import SwiftUI
+import AVFoundation
 
 struct ArticleReaderView: View {
     let article: Article
