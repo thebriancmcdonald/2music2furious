@@ -109,13 +109,43 @@ struct Article: Identifiable, Codable {
 class ArticleManager: ObservableObject {
     static let shared = ArticleManager()
 
+    // App Group identifier - MUST match the App Group you create in Xcode
+    // Change this to your actual App Group identifier
+    static let appGroupIdentifier = "group.com.2music2furious.shared"
+
     @Published var articles: [Article] = []
 
-    private let userDefaults = UserDefaults.standard
+    // Use App Group UserDefaults for sharing with Share Extension
+    private let userDefaults: UserDefaults
     private let articlesKey = "savedArticles"
+    private let pendingArticlesKey = "pendingArticles"  // For articles added via Share Extension
 
     init() {
+        // Try to use App Group UserDefaults, fall back to standard if not configured
+        if let sharedDefaults = UserDefaults(suiteName: ArticleManager.appGroupIdentifier) {
+            self.userDefaults = sharedDefaults
+        } else {
+            print("ArticleManager: App Group not configured, using standard UserDefaults")
+            self.userDefaults = UserDefaults.standard
+        }
         loadArticles()
+    }
+
+    /// Call this when the app becomes active to check for articles added via Share Extension
+    func checkForPendingArticles() {
+        if let data = userDefaults.data(forKey: pendingArticlesKey),
+           let pendingArticles = try? JSONDecoder().decode([Article].self, from: data),
+           !pendingArticles.isEmpty {
+            // Add pending articles
+            for article in pendingArticles {
+                if !articles.contains(where: { $0.id == article.id }) {
+                    articles.insert(article, at: 0)
+                }
+            }
+            // Clear pending articles
+            userDefaults.removeObject(forKey: pendingArticlesKey)
+            saveArticles()
+        }
     }
 
     // MARK: - CRUD Operations
