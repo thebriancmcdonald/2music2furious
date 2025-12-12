@@ -21,6 +21,7 @@ struct ArticleReaderView: View {
     @State private var currentChapterIndex: Int = 0
     @State private var showingChapterList = false
     @State private var showingSettings = false
+    @State private var lastScrolledPosition: Int = -1  // Track last scrolled position to avoid excessive scrolling
 
     var currentChapter: ArticleChapter {
         guard article.chapters.indices.contains(currentChapterIndex) else {
@@ -72,6 +73,29 @@ struct ArticleReaderView: View {
                             Color.clear.frame(height: 120)
                         }
                         .padding(.vertical)
+                    }
+                    .onChange(of: tts.currentWordRange) { newRange in
+                        // Auto-scroll when TTS is playing
+                        guard tts.isPlaying,
+                              newRange.location != NSNotFound,
+                              !currentChapter.content.isEmpty else { return }
+
+                        // Calculate progress through the text (0.0 to 1.0)
+                        let progress = Double(newRange.location) / Double(currentChapter.content.count)
+
+                        // Only scroll every 5% to avoid constant scrolling
+                        let segment = Int(progress * 20) // 20 segments = 5% each
+
+                        if segment != lastScrolledPosition {
+                            lastScrolledPosition = segment
+
+                            // Scroll to content with anchor point based on progress
+                            // Keep content near top of screen (0.15 offset)
+                            let anchorY = max(0.0, min(progress - 0.15, 0.85))
+                            withAnimation(.easeInOut(duration: 0.4)) {
+                                scrollProxy.scrollTo("content", anchor: UnitPoint(x: 0.5, y: anchorY))
+                            }
+                        }
                     }
                 }
 
@@ -145,6 +169,7 @@ struct ArticleReaderView: View {
     private func loadChapterForTTS() {
         tts.stop()
         tts.loadText(currentChapter.content)
+        lastScrolledPosition = -1  // Reset scroll tracking for new chapter
 
         // Restore position if this is the saved chapter
         if currentChapterIndex == article.lastReadChapter && article.lastReadPosition > 0 {
@@ -529,6 +554,7 @@ struct HighlightedTextView: View {
             isPlaying: isPlaying,
             onTap: onTapWord
         )
+        .fixedSize(horizontal: false, vertical: true)  // Allow full vertical expansion
     }
 }
 
@@ -547,6 +573,7 @@ struct TappableTextView: UIViewRepresentable {
         textView.textContainerInset = .zero
         textView.textContainer.lineFragmentPadding = 0
         textView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        textView.setContentHuggingPriority(.defaultLow, for: .vertical)
 
         // Add tap gesture
         let tapGesture = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleTap(_:)))
@@ -590,6 +617,11 @@ struct TappableTextView: UIViewRepresentable {
         }
 
         textView.attributedText = attributedString
+
+        // Force layout update to ensure full content is shown
+        textView.setNeedsLayout()
+        textView.layoutIfNeeded()
+
         context.coordinator.onTap = onTap
     }
 
@@ -641,5 +673,12 @@ struct TappableTextView: UIViewRepresentable {
 
             onTap(wordStart)
         }
+    }
+
+    // Calculate intrinsic size to show all content
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: UITextView, context: Context) -> CGSize? {
+        let width = proposal.width ?? UIScreen.main.bounds.width
+        let size = uiView.sizeThatFits(CGSize(width: width, height: CGFloat.greatestFiniteMagnitude))
+        return CGSize(width: width, height: size.height)
     }
 }
