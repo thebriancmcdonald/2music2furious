@@ -44,6 +44,7 @@ class TTSManager: NSObject, ObservableObject {
     private var currentChunkIndex: Int = 0
     private var chunkStartPosition: Int = 0  // Global position where current chunk starts
     private var shouldContinueChunks = false  // Flag to prevent auto-advance after stop
+    private var utteranceGeneration: Int = 0  // Track which utterance is current to ignore stale callbacks
 
     // Callbacks
     var onWordSpoken: ((NSRange) -> Void)?
@@ -139,6 +140,7 @@ class TTSManager: NSObject, ObservableObject {
     /// Stop speaking completely
     func stop() {
         shouldContinueChunks = false  // Prevent auto-advance to next chunk
+        utteranceGeneration += 1  // Invalidate any pending callbacks from old utterances
         synthesizer.stopSpeaking(at: .immediate)
         isPlaying = false
         isPaused = false
@@ -311,6 +313,7 @@ class TTSManager: NSObject, ObservableObject {
         // Set initial highlight to start of chunk (will be updated by callback)
         currentWordRange = NSRange(location: chunk.startPosition, length: 1)
         shouldContinueChunks = true  // Allow auto-advance to next chunk
+        utteranceGeneration += 1  // New generation for this utterance
 
         // Create utterance for this chunk
         let newUtterance = AVSpeechUtterance(string: chunk.text)
@@ -420,7 +423,15 @@ extension TTSManager: AVSpeechSynthesizerDelegate {
     }
 
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
+        // Capture generation to check if this callback is still relevant
+        let generationAtFinish = self.utteranceGeneration
+
         DispatchQueue.main.async {
+            // Ignore if generation changed (we've started a new utterance)
+            guard generationAtFinish == self.utteranceGeneration else {
+                return
+            }
+
             // Only continue if not stopped/paused
             guard self.shouldContinueChunks else {
                 return
@@ -443,10 +454,8 @@ extension TTSManager: AVSpeechSynthesizerDelegate {
     }
 
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
-        DispatchQueue.main.async {
-            self.isPlaying = false
-            self.isPaused = false
-        }
+        // Don't modify state here - stop() already handles it synchronously
+        // This callback arrives async and could override state from a new utterance
     }
 
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer,
