@@ -43,6 +43,7 @@ class TTSManager: NSObject, ObservableObject {
     private var chunks: [(text: String, startPosition: Int)] = []
     private var currentChunkIndex: Int = 0
     private var chunkStartPosition: Int = 0  // Global position where current chunk starts
+    private var shouldContinueChunks = false  // Flag to prevent auto-advance after stop
 
     // Callbacks
     var onWordSpoken: ((NSRange) -> Void)?
@@ -118,6 +119,7 @@ class TTSManager: NSObject, ObservableObject {
     /// Pause speaking
     func pause() {
         if synthesizer.isSpeaking {
+            shouldContinueChunks = false  // Prevent auto-advance to next chunk
             synthesizer.pauseSpeaking(at: .immediate)
             isPaused = true
             isPlaying = false
@@ -127,6 +129,7 @@ class TTSManager: NSObject, ObservableObject {
     /// Resume speaking after pause
     func resume() {
         if isPaused {
+            shouldContinueChunks = true  // Allow auto-advance again
             synthesizer.continueSpeaking()
             isPaused = false
             isPlaying = true
@@ -135,6 +138,7 @@ class TTSManager: NSObject, ObservableObject {
 
     /// Stop speaking completely
     func stop() {
+        shouldContinueChunks = false  // Prevent auto-advance to next chunk
         synthesizer.stopSpeaking(at: .immediate)
         isPlaying = false
         isPaused = false
@@ -303,7 +307,10 @@ class TTSManager: NSObject, ObservableObject {
         let chunk = chunks[currentChunkIndex]
         chunkStartPosition = chunk.startPosition
         currentCharacterPosition = chunk.startPosition
-        currentWordRange = NSRange(location: NSNotFound, length: 0)
+
+        // Set initial highlight to start of chunk (will be updated by callback)
+        currentWordRange = NSRange(location: chunk.startPosition, length: 1)
+        shouldContinueChunks = true  // Allow auto-advance to next chunk
 
         // Create utterance for this chunk
         let newUtterance = AVSpeechUtterance(string: chunk.text)
@@ -414,6 +421,11 @@ extension TTSManager: AVSpeechSynthesizerDelegate {
 
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
         DispatchQueue.main.async {
+            // Only continue if not stopped/paused
+            guard self.shouldContinueChunks else {
+                return
+            }
+
             // Move to next chunk
             self.currentChunkIndex += 1
 
@@ -424,6 +436,7 @@ extension TTSManager: AVSpeechSynthesizerDelegate {
                 // All done
                 self.isPlaying = false
                 self.isPaused = false
+                self.shouldContinueChunks = false
                 self.onChapterFinished?()
             }
         }
