@@ -45,7 +45,6 @@ class TTSManager: NSObject, ObservableObject {
     private var chunkStartPosition: Int = 0  // Global position where current chunk starts
     private var shouldContinueChunks = false  // Flag to prevent auto-advance after stop
     private var utteranceGeneration: Int = 0  // Track which utterance is current to ignore stale callbacks
-    private var pendingSeekPosition: Int? = nil  // Position to seek to after cancel completes
 
     // Callbacks
     var onWordSpoken: ((NSRange) -> Void)?
@@ -142,7 +141,6 @@ class TTSManager: NSObject, ObservableObject {
     func stop() {
         shouldContinueChunks = false  // Prevent auto-advance to next chunk
         utteranceGeneration += 1  // Invalidate any pending callbacks from old utterances
-        pendingSeekPosition = nil  // Clear any pending seek
         synthesizer.stopSpeaking(at: .immediate)
         isPlaying = false
         isPaused = false
@@ -178,22 +176,18 @@ class TTSManager: NSObject, ObservableObject {
         let nsLength = (currentText as NSString).length
         let targetPosition = max(0, min(characterPosition, nsLength))
 
-        // Check both synthesizer state AND our isPlaying flag
-        // (synthesizer.isSpeaking can be false during gaps between words/chunks)
-        if synthesizer.isSpeaking || isPlaying {
-            pendingSeekPosition = targetPosition
-            shouldContinueChunks = false
-            utteranceGeneration += 1
-            synthesizer.stopSpeaking(at: .immediate)
-            isPlaying = false  // Update state immediately
-            // The didCancel callback will start speaking from pendingSeekPosition
-        } else {
-            // Not speaking, can start immediately
-            currentCharacterPosition = targetPosition
-            updateProgress()
-            buildChunks(from: currentCharacterPosition)
-            speak(from: currentCharacterPosition)
-        }
+        // Stop any current speech and clean up
+        shouldContinueChunks = false
+        utteranceGeneration += 1
+        synthesizer.stopSpeaking(at: .immediate)
+        isPlaying = false
+        isPaused = false
+
+        // Start immediately from new position
+        currentCharacterPosition = targetPosition
+        updateProgress()
+        buildChunks(from: currentCharacterPosition)
+        speak(from: currentCharacterPosition)
     }
 
     /// Seek to a percentage (0.0 to 1.0)
@@ -469,20 +463,8 @@ extension TTSManager: AVSpeechSynthesizerDelegate {
     }
 
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
-        DispatchQueue.main.async {
-            // Check if there's a pending seek position (from seekAndPlay)
-            if let seekPosition = self.pendingSeekPosition {
-                self.pendingSeekPosition = nil
-                self.currentCharacterPosition = seekPosition
-                self.updateProgress()
-                self.buildChunks(from: seekPosition)
-                self.speak(from: seekPosition)
-            } else {
-                // Normal cancel - just update state
-                self.isPlaying = false
-                self.isPaused = false
-            }
-        }
+        // Don't modify state here - the caller (stop/seekAndPlay) handles state synchronously
+        // This prevents async callback from overriding state set by new utterances
     }
 
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer,
