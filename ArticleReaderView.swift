@@ -514,56 +514,127 @@ struct ArticleReaderView: View {
     }
 }
 
-// MARK: - Highlighted Text View
+// MARK: - Highlighted Text View with Tap-to-Seek
 
 struct HighlightedTextView: View {
     let text: String
     let highlightRange: NSRange
     let isPlaying: Bool
-    let onTapWord: (Int) -> Void  // Kept for API compatibility but not used
+    let onTapWord: (Int) -> Void
 
     var body: some View {
-        // Show plain text if AttributedString fails, otherwise show highlighted version
-        if let attributed = makeAttributedText() {
-            Text(attributed)
-                .font(.system(size: 18, weight: .regular, design: .serif))
-                .lineSpacing(8)
-                .textSelection(.enabled)
-        } else {
-            // Fallback to plain text if AttributedString fails
-            Text(text)
-                .font(.system(size: 18, weight: .regular, design: .serif))
-                .lineSpacing(8)
-                .foregroundColor(.primary)
-                .textSelection(.enabled)
-        }
+        TappableTextView(
+            text: text,
+            highlightRange: highlightRange,
+            isPlaying: isPlaying,
+            onTap: onTapWord
+        )
+    }
+}
+
+// UITextView wrapper for accurate tap-to-seek
+struct TappableTextView: UIViewRepresentable {
+    let text: String
+    let highlightRange: NSRange
+    let isPlaying: Bool
+    let onTap: (Int) -> Void
+
+    func makeUIView(context: Context) -> UITextView {
+        let textView = UITextView()
+        textView.isEditable = false
+        textView.isScrollEnabled = false
+        textView.backgroundColor = .clear
+        textView.textContainerInset = .zero
+        textView.textContainer.lineFragmentPadding = 0
+
+        // Add tap gesture
+        let tapGesture = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleTap(_:)))
+        textView.addGestureRecognizer(tapGesture)
+
+        return textView
     }
 
-    private func makeAttributedText() -> AttributedString? {
-        guard !text.isEmpty else { return nil }
+    func updateUIView(_ textView: UITextView, context: Context) {
+        // Create attributed string
+        let attributedString = NSMutableAttributedString(string: text)
 
-        var attributed = AttributedString(text)
+        // Base style
+        let paragraphStyle = NSMutableParagraphStyle()
+        paragraphStyle.lineSpacing = 8
 
-        // Apply default styling
-        attributed.foregroundColor = .primary
+        let baseAttributes: [NSAttributedString.Key: Any] = [
+            .font: UIFont.systemFont(ofSize: 18, weight: .regular),
+            .foregroundColor: UIColor.label,
+            .paragraphStyle: paragraphStyle
+        ]
 
-        // Highlight current word if playing
+        attributedString.addAttributes(baseAttributes, range: NSRange(location: 0, length: text.count))
+
+        // Apply highlight if playing
         if isPlaying && highlightRange.location != NSNotFound && highlightRange.length > 0 {
             let safeLocation = min(highlightRange.location, text.count)
-            let safeLength = min(highlightRange.length, text.count - safeLocation)
+            let safeLength = min(highlightRange.length, max(0, text.count - safeLocation))
 
             if safeLength > 0 {
-                let startIndex = text.index(text.startIndex, offsetBy: safeLocation)
-                let endIndex = text.index(startIndex, offsetBy: safeLength)
-
-                if let attrStart = AttributedString.Index(startIndex, within: attributed),
-                   let attrEnd = AttributedString.Index(endIndex, within: attributed) {
-                    attributed[attrStart..<attrEnd].foregroundColor = .white
-                    attributed[attrStart..<attrEnd].backgroundColor = .royalPurple
-                }
+                let highlightAttributes: [NSAttributedString.Key: Any] = [
+                    .foregroundColor: UIColor.white,
+                    .backgroundColor: UIColor(red: 0.4, green: 0.2, blue: 0.6, alpha: 1.0) // Royal purple
+                ]
+                attributedString.addAttributes(highlightAttributes, range: NSRange(location: safeLocation, length: safeLength))
             }
         }
 
-        return attributed
+        textView.attributedText = attributedString
+        context.coordinator.onTap = onTap
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onTap: onTap)
+    }
+
+    class Coordinator: NSObject {
+        var onTap: (Int) -> Void
+
+        init(onTap: @escaping (Int) -> Void) {
+            self.onTap = onTap
+        }
+
+        @objc func handleTap(_ gesture: UITapGestureRecognizer) {
+            guard let textView = gesture.view as? UITextView else { return }
+
+            let location = gesture.location(in: textView)
+
+            // Get character index at tap location
+            let layoutManager = textView.layoutManager
+            let textContainer = textView.textContainer
+
+            // Account for text container inset
+            var point = location
+            point.x -= textView.textContainerInset.left
+            point.y -= textView.textContainerInset.top
+
+            // Get the character index
+            let characterIndex = layoutManager.characterIndex(
+                for: point,
+                in: textContainer,
+                fractionOfDistanceBetweenInsertionPoints: nil
+            )
+
+            // Find the start of the word at this position
+            let text = textView.text ?? ""
+            let nsText = text as NSString
+            var wordStart = characterIndex
+
+            // Move backward to find word start
+            while wordStart > 0 {
+                let prevChar = nsText.character(at: wordStart - 1)
+                if CharacterSet.whitespacesAndNewlines.contains(Unicode.Scalar(prevChar)!) {
+                    break
+                }
+                wordStart -= 1
+            }
+
+            onTap(wordStart)
+        }
     }
 }

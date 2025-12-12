@@ -188,8 +188,24 @@ class ShareViewController: UIViewController {
                 // Decode HTML entities
                 content = self?.decodeHTMLEntities(content) ?? content
 
-                // Clean whitespace
+                // Aggressive whitespace cleaning
+                // Remove leading/trailing whitespace from each line
+                content = content.components(separatedBy: "\n")
+                    .map { $0.trimmingCharacters(in: .whitespaces) }
+                    .joined(separator: "\n")
+
+                // Replace multiple spaces with single space
+                content = content.replacingOccurrences(of: " {2,}", with: " ", options: .regularExpression)
+
+                // Replace 3+ newlines with just 2
                 content = content.replacingOccurrences(of: "\n{3,}", with: "\n\n", options: .regularExpression)
+
+                // Remove lines that are just whitespace
+                content = content.components(separatedBy: "\n")
+                    .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty || $0.isEmpty }
+                    .joined(separator: "\n")
+
+                // Final trim
                 content = content.trimmingCharacters(in: .whitespacesAndNewlines)
 
                 if content.isEmpty {
