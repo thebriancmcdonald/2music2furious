@@ -402,13 +402,16 @@ class TTSManager: NSObject, ObservableObject {
 extension TTSManager: AVSpeechSynthesizerDelegate {
 
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didStart utterance: AVSpeechUtterance) {
+        let generationAtStart = self.utteranceGeneration
         DispatchQueue.main.async {
+            guard generationAtStart == self.utteranceGeneration else { return }
             self.isPlaying = true
             self.isPaused = false
         }
     }
 
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didPause utterance: AVSpeechUtterance) {
+        // Don't check generation - pause is always intentional and current
         DispatchQueue.main.async {
             self.isPlaying = false
             self.isPaused = true
@@ -416,6 +419,7 @@ extension TTSManager: AVSpeechSynthesizerDelegate {
     }
 
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didContinue utterance: AVSpeechUtterance) {
+        // Don't check generation - continue is always intentional and current
         DispatchQueue.main.async {
             self.isPlaying = true
             self.isPaused = false
@@ -461,10 +465,19 @@ extension TTSManager: AVSpeechSynthesizerDelegate {
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer,
                            willSpeakRangeOfSpeechString characterRange: NSRange,
                            utterance: AVSpeechUtterance) {
+        // Capture generation and chunk position to check if this callback is still relevant
+        let generationAtCallback = self.utteranceGeneration
+        let chunkStart = self.chunkStartPosition
+
         DispatchQueue.main.async {
+            // Ignore if generation changed (we've started a new utterance)
+            guard generationAtCallback == self.utteranceGeneration else {
+                return
+            }
+
             // Adjust range to account for chunk's position in full text
             let adjustedRange = NSRange(
-                location: self.chunkStartPosition + characterRange.location,
+                location: chunkStart + characterRange.location,
                 length: characterRange.length
             )
 
