@@ -168,6 +168,9 @@ class ShareViewController: UIViewController {
 
                 if title.isEmpty { title = "Web Article" }
 
+                // Decode HTML entities in title
+                title = self?.decodeHTMLEntities(title) ?? title
+
                 // Extract and clean content
                 var content = html
 
@@ -182,14 +185,8 @@ class ShareViewController: UIViewController {
                 content = content.replacingOccurrences(of: "</p>", with: "\n\n", options: .caseInsensitive)
                 content = content.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
 
-                // Decode common entities
-                content = content
-                    .replacingOccurrences(of: "&nbsp;", with: " ")
-                    .replacingOccurrences(of: "&amp;", with: "&")
-                    .replacingOccurrences(of: "&lt;", with: "<")
-                    .replacingOccurrences(of: "&gt;", with: ">")
-                    .replacingOccurrences(of: "&quot;", with: "\"")
-                    .replacingOccurrences(of: "&#39;", with: "'")
+                // Decode HTML entities
+                content = self?.decodeHTMLEntities(content) ?? content
 
                 // Clean whitespace
                 content = content.replacingOccurrences(of: "\n{3,}", with: "\n\n", options: .regularExpression)
@@ -239,6 +236,64 @@ class ShareViewController: UIViewController {
 
         saveArticle(article)
         completeWithSuccess("Text saved!")
+    }
+
+    // MARK: - HTML Entity Decoding
+
+    private func decodeHTMLEntities(_ string: String) -> String {
+        var result = string
+
+        // Named entities
+        let namedEntities: [(String, String)] = [
+            ("&nbsp;", " "),
+            ("&amp;", "&"),
+            ("&lt;", "<"),
+            ("&gt;", ">"),
+            ("&quot;", "\""),
+            ("&apos;", "'"),
+            ("&mdash;", "—"),
+            ("&ndash;", "–"),
+            ("&hellip;", "…"),
+            ("&ldquo;", "\u{201C}"),
+            ("&rdquo;", "\u{201D}"),
+            ("&lsquo;", "\u{2018}"),
+            ("&rsquo;", "\u{2019}"),
+            ("&copy;", "©"),
+            ("&reg;", "®"),
+            ("&trade;", "™"),
+            ("&bull;", "•"),
+            ("&middot;", "·")
+        ]
+
+        for (entity, replacement) in namedEntities {
+            result = result.replacingOccurrences(of: entity, with: replacement)
+        }
+
+        // Decimal entities (&#39; &#8217; etc.)
+        while let range = result.range(of: "&#[0-9]+;", options: .regularExpression) {
+            let entity = String(result[range])
+            let numberStr = entity.dropFirst(2).dropLast()
+            if let codePoint = Int(numberStr),
+               let scalar = Unicode.Scalar(codePoint) {
+                result.replaceSubrange(range, with: String(Character(scalar)))
+            } else {
+                break
+            }
+        }
+
+        // Hex entities (&#x27; &#x2019; etc.)
+        while let range = result.range(of: "&#[xX][0-9a-fA-F]+;", options: .regularExpression) {
+            let entity = String(result[range])
+            let hexStr = entity.dropFirst(3).dropLast() // Remove &#x and ;
+            if let codePoint = Int(hexStr, radix: 16),
+               let scalar = Unicode.Scalar(codePoint) {
+                result.replaceSubrange(range, with: String(Character(scalar)))
+            } else {
+                break
+            }
+        }
+
+        return result
     }
 
     // MARK: - Save Article

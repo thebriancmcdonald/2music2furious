@@ -520,41 +520,28 @@ struct HighlightedTextView: View {
     let text: String
     let highlightRange: NSRange
     let isPlaying: Bool
-    let onTapWord: (Int) -> Void
-
-    @State private var textHeight: CGFloat = 0
+    let onTapWord: (Int) -> Void  // Kept for API compatibility but not used
 
     var body: some View {
-        // Use attributed string for highlighting
-        Text(attributedText)
-            .font(.system(size: 18, weight: .regular, design: .serif))
-            .lineSpacing(8)
-            .background(
-                GeometryReader { geo in
-                    Color.clear.onAppear {
-                        textHeight = geo.size.height
-                    }
-                    .onChange(of: text) { _ in
-                        textHeight = geo.size.height
-                    }
-                }
-            )
-            .contentShape(Rectangle())
-            .onTapGesture { location in
-                // Estimate character position based on tap location
-                guard textHeight > 0 else { return }
-
-                // Calculate approximate position as percentage through text
-                let tapPercent = max(0, min(1, location.y / textHeight))
-                let estimatedPosition = Int(Double(text.count) * tapPercent)
-
-                // Snap to nearest word boundary
-                let position = findNearestWordStart(in: text, near: estimatedPosition)
-                onTapWord(position)
-            }
+        // Show plain text if AttributedString fails, otherwise show highlighted version
+        if let attributed = makeAttributedText() {
+            Text(attributed)
+                .font(.system(size: 18, weight: .regular, design: .serif))
+                .lineSpacing(8)
+                .textSelection(.enabled)
+        } else {
+            // Fallback to plain text if AttributedString fails
+            Text(text)
+                .font(.system(size: 18, weight: .regular, design: .serif))
+                .lineSpacing(8)
+                .foregroundColor(.primary)
+                .textSelection(.enabled)
+        }
     }
 
-    private var attributedText: AttributedString {
+    private func makeAttributedText() -> AttributedString? {
+        guard !text.isEmpty else { return nil }
+
         var attributed = AttributedString(text)
 
         // Apply default styling
@@ -562,29 +549,21 @@ struct HighlightedTextView: View {
 
         // Highlight current word if playing
         if isPlaying && highlightRange.location != NSNotFound && highlightRange.length > 0 {
-            let startIndex = text.index(text.startIndex, offsetBy: min(highlightRange.location, text.count), limitedBy: text.endIndex) ?? text.endIndex
-            let endIndex = text.index(startIndex, offsetBy: min(highlightRange.length, text.count - highlightRange.location), limitedBy: text.endIndex) ?? text.endIndex
+            let safeLocation = min(highlightRange.location, text.count)
+            let safeLength = min(highlightRange.length, text.count - safeLocation)
 
-            if startIndex < endIndex, let attrStart = AttributedString.Index(startIndex, within: attributed),
-               let attrEnd = AttributedString.Index(endIndex, within: attributed) {
-                attributed[attrStart..<attrEnd].foregroundColor = .white
-                attributed[attrStart..<attrEnd].backgroundColor = .royalPurple
+            if safeLength > 0 {
+                let startIndex = text.index(text.startIndex, offsetBy: safeLocation)
+                let endIndex = text.index(startIndex, offsetBy: safeLength)
+
+                if let attrStart = AttributedString.Index(startIndex, within: attributed),
+                   let attrEnd = AttributedString.Index(endIndex, within: attributed) {
+                    attributed[attrStart..<attrEnd].foregroundColor = .white
+                    attributed[attrStart..<attrEnd].backgroundColor = .royalPurple
+                }
             }
         }
 
         return attributed
-    }
-
-    private func findNearestWordStart(in text: String, near position: Int) -> Int {
-        let nsText = text as NSString
-        var pos = min(position, nsText.length - 1)
-        guard pos >= 0 else { return 0 }
-
-        // Move backward to find word start
-        while pos > 0 && !CharacterSet.whitespacesAndNewlines.contains(Unicode.Scalar(nsText.character(at: pos - 1))!) {
-            pos -= 1
-        }
-
-        return pos
     }
 }
