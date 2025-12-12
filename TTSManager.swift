@@ -4,6 +4,7 @@
 //
 //  Text-to-Speech manager using AVSpeechSynthesizer
 //  Provides word-by-word callbacks for highlighting
+//  Chunks long text to ensure reliable word callbacks
 //
 
 import Foundation
@@ -17,7 +18,7 @@ class TTSManager: NSObject, ObservableObject {
 
     @Published var isPlaying = false
     @Published var isPaused = false
-    @Published var currentWordRange: NSRange = NSRange(location: 0, length: 0)
+    @Published var currentWordRange: NSRange = NSRange(location: NSNotFound, length: 0)
     @Published var progress: Double = 0  // 0.0 to 1.0
     @Published var playbackSpeed: Float = 1.0 {
         didSet {
@@ -38,8 +39,10 @@ class TTSManager: NSObject, ObservableObject {
     private(set) var currentText: String = ""
     private(set) var currentCharacterPosition: Int = 0
 
-    // Store the starting position for the current utterance to correctly calculate word ranges
-    private var utteranceStartPosition: Int = 0
+    // Chunking support - break long text into smaller pieces for reliable callbacks
+    private var chunks: [(text: String, startPosition: Int)] = []
+    private var currentChunkIndex: Int = 0
+    private var chunkStartPosition: Int = 0  // Global position where current chunk starts
 
     // Callbacks
     var onWordSpoken: ((NSRange) -> Void)?
@@ -51,8 +54,8 @@ class TTSManager: NSObject, ObservableObject {
     private let synthesizer = AVSpeechSynthesizer()
     private var utterance: AVSpeechUtterance?
 
-    // For tracking position when paused
-    private var pausedAtPosition: Int = 0
+    // Maximum characters per chunk (keep small for reliable callbacks)
+    private let maxChunkSize = 1000
 
     // MARK: - Available Voices
 
@@ -96,6 +99,11 @@ class TTSManager: NSObject, ObservableObject {
         currentText = text
         currentCharacterPosition = 0
         progress = 0
+        chunks = []
+        currentChunkIndex = 0
+
+        // Pre-chunk the text
+        buildChunks(from: 0)
     }
 
     /// Start speaking from the beginning or current position
@@ -143,10 +151,15 @@ class TTSManager: NSObject, ObservableObject {
 
     /// Seek to a specific character position
     func seek(to characterPosition: Int) {
+        let nsLength = (currentText as NSString).length
         let wasPlaying = isPlaying
         stop()
-        currentCharacterPosition = max(0, min(characterPosition, currentText.count))
+        currentCharacterPosition = max(0, min(characterPosition, nsLength))
         updateProgress()
+
+        // Rebuild chunks from new position
+        buildChunks(from: currentCharacterPosition)
+
         if wasPlaying {
             speak(from: currentCharacterPosition)
         }
@@ -154,7 +167,8 @@ class TTSManager: NSObject, ObservableObject {
 
     /// Seek to a percentage (0.0 to 1.0)
     func seekToPercent(_ percent: Double) {
-        let position = Int(Double(currentText.count) * percent)
+        let nsLength = (currentText as NSString).length
+        let position = Int(Double(nsLength) * percent)
         seek(to: position)
     }
 
@@ -181,26 +195,104 @@ class TTSManager: NSObject, ObservableObject {
         }
     }
 
-    // MARK: - Private Methods
+    // MARK: - Chunking
+
+    /// Build chunks starting from a given position
+    private func buildChunks(from startPosition: Int) {
+        chunks = []
+        currentChunkIndex = 0
+
+        let nsText = currentText as NSString
+        let totalLength = nsText.length
+
+        guard startPosition < totalLength else { return }
+
+        var position = startPosition
+
+        while position < totalLength {
+            // Find a good break point (end of sentence or paragraph)
+            var endPosition = min(position + maxChunkSize, totalLength)
+
+            if endPosition < totalLength {
+                // Look for paragraph break first
+                let searchRange = NSRange(location: position, length: endPosition - position)
+                let paragraphRange = nsText.range(of: "\n\n", options: .backwards, range: searchRange)
+
+                if paragraphRange.location != NSNotFound && paragraphRange.location > position + 200 {
+                    endPosition = paragraphRange.location + paragraphRange.length
+                } else {
+                    // Look for sentence break
+                    let sentenceBreaks = [". ", "! ", "? ", ".\n", "!\n", "?\n"]
+                    var bestBreak = NSNotFound
+
+                    for breakStr in sentenceBreaks {
+                        let range = nsText.range(of: breakStr, options: .backwards, range: searchRange)
+                        if range.location != NSNotFound && range.location > position + 200 {
+                            if bestBreak == NSNotFound || range.location > bestBreak {
+                                bestBreak = range.location + range.length
+                            }
+                        }
+                    }
+
+                    if bestBreak != NSNotFound {
+                        endPosition = bestBreak
+                    } else {
+                        // Fall back to word boundary
+                        while endPosition > position + 200 && endPosition < totalLength {
+                            let char = nsText.character(at: endPosition)
+                            if CharacterSet.whitespacesAndNewlines.contains(Unicode.Scalar(char)!) {
+                                endPosition += 1
+                                break
+                            }
+                            endPosition -= 1
+                        }
+                    }
+                }
+            }
+
+            let chunkText = nsText.substring(with: NSRange(location: position, length: endPosition - position))
+            chunks.append((text: chunkText, startPosition: position))
+            position = endPosition
+        }
+    }
+
+    // MARK: - Speaking
 
     private func speak(from position: Int) {
         guard !currentText.isEmpty else { return }
 
-        // Get text from position to end
-        let startIndex = currentText.index(currentText.startIndex, offsetBy: min(position, currentText.count))
-        let textToSpeak = String(currentText[startIndex...])
+        // Rebuild chunks if needed
+        if chunks.isEmpty || position != chunks.first?.startPosition {
+            buildChunks(from: position)
+        }
 
-        guard !textToSpeak.isEmpty else {
+        guard !chunks.isEmpty else {
             onChapterFinished?()
             return
         }
 
-        currentCharacterPosition = position
-        utteranceStartPosition = position  // Store starting position for word range calculations
-        currentWordRange = NSRange(location: NSNotFound, length: 0)  // Reset highlight until first word callback
+        currentChunkIndex = 0
+        speakCurrentChunk()
+    }
 
-        // Create utterance
-        let newUtterance = AVSpeechUtterance(string: textToSpeak)
+    private func speakCurrentChunk() {
+        guard currentChunkIndex < chunks.count else {
+            // All chunks done
+            DispatchQueue.main.async {
+                self.isPlaying = false
+                self.isPaused = false
+                self.onChapterFinished?()
+            }
+            return
+        }
+
+        let chunk = chunks[currentChunkIndex]
+        chunkStartPosition = chunk.startPosition
+        currentCharacterPosition = chunk.startPosition
+        currentWordRange = NSRange(location: NSNotFound, length: 0)
+
+        // Create utterance for this chunk
+        let newUtterance = AVSpeechUtterance(string: chunk.text)
 
         // Set voice
         if let voiceId = selectedVoiceIdentifier,
@@ -210,11 +302,8 @@ class TTSManager: NSObject, ObservableObject {
             newUtterance.voice = defaultVoice
         }
 
-        // Set rate (0.0 to 1.0, where 0.5 is normal)
-        // Map our 1.0-2.0 scale to AVSpeechUtterance's scale
+        // Set rate
         newUtterance.rate = mapSpeedToRate(playbackSpeed)
-
-        // Other settings
         newUtterance.pitchMultiplier = 1.0
         newUtterance.volume = 1.0
 
@@ -236,11 +325,12 @@ class TTSManager: NSObject, ObservableObject {
     }
 
     private func updateProgress() {
-        guard !currentText.isEmpty else {
+        let nsLength = (currentText as NSString).length
+        guard nsLength > 0 else {
             progress = 0
             return
         }
-        progress = Double(currentCharacterPosition) / Double(currentText.count)
+        progress = Double(currentCharacterPosition) / Double(nsLength)
     }
 
     private enum Direction {
@@ -310,9 +400,18 @@ extension TTSManager: AVSpeechSynthesizerDelegate {
 
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
         DispatchQueue.main.async {
-            self.isPlaying = false
-            self.isPaused = false
-            self.onChapterFinished?()
+            // Move to next chunk
+            self.currentChunkIndex += 1
+
+            if self.currentChunkIndex < self.chunks.count {
+                // More chunks to speak
+                self.speakCurrentChunk()
+            } else {
+                // All done
+                self.isPlaying = false
+                self.isPaused = false
+                self.onChapterFinished?()
+            }
         }
     }
 
@@ -327,10 +426,9 @@ extension TTSManager: AVSpeechSynthesizerDelegate {
                            willSpeakRangeOfSpeechString characterRange: NSRange,
                            utterance: AVSpeechUtterance) {
         DispatchQueue.main.async {
-            // Adjust range to account for our starting position
-            // Use utteranceStartPosition (fixed) instead of currentCharacterPosition (which changes)
+            // Adjust range to account for chunk's position in full text
             let adjustedRange = NSRange(
-                location: self.utteranceStartPosition + characterRange.location,
+                location: self.chunkStartPosition + characterRange.location,
                 length: characterRange.length
             )
 
