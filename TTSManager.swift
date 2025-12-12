@@ -197,6 +197,7 @@ class TTSManager: NSObject, ObservableObject {
 
         currentCharacterPosition = position
         utteranceStartPosition = position  // Store starting position for word range calculations
+        currentWordRange = NSRange(location: NSNotFound, length: 0)  // Reset highlight until first word callback
 
         // Create utterance
         let newUtterance = AVSpeechUtterance(string: textToSpeak)

@@ -546,6 +546,7 @@ struct TappableTextView: UIViewRepresentable {
         textView.backgroundColor = .clear
         textView.textContainerInset = .zero
         textView.textContainer.lineFragmentPadding = 0
+        textView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         // Add tap gesture
         let tapGesture = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleTap(_:)))
@@ -561,6 +562,7 @@ struct TappableTextView: UIViewRepresentable {
         // Base style
         let paragraphStyle = NSMutableParagraphStyle()
         paragraphStyle.lineSpacing = 8
+        paragraphStyle.lineBreakMode = .byWordWrapping
 
         let baseAttributes: [NSAttributedString.Key: Any] = [
             .font: UIFont.systemFont(ofSize: 18, weight: .regular),
@@ -570,10 +572,13 @@ struct TappableTextView: UIViewRepresentable {
 
         attributedString.addAttributes(baseAttributes, range: NSRange(location: 0, length: text.count))
 
-        // Apply highlight if playing
+        // Apply highlight ONLY to the current word (not everything after)
+        // Cap highlight length to reasonable word size (max 50 chars)
         if isPlaying && highlightRange.location != NSNotFound && highlightRange.length > 0 {
             let safeLocation = min(highlightRange.location, text.count)
-            let safeLength = min(highlightRange.length, max(0, text.count - safeLocation))
+            // Cap length to actual word length, max 50 characters
+            let maxWordLength = min(highlightRange.length, 50)
+            let safeLength = min(maxWordLength, max(0, text.count - safeLocation))
 
             if safeLength > 0 {
                 let highlightAttributes: [NSAttributedString.Key: Any] = [
