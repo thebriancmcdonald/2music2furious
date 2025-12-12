@@ -21,7 +21,7 @@ struct ArticleReaderView: View {
     @State private var currentChapterIndex: Int = 0
     @State private var showingChapterList = false
     @State private var showingSettings = false
-    @State private var lastScrolledPosition: Int = -1  // Track last scrolled position to avoid excessive scrolling
+    @State private var lastScrolledCharPosition: Int = -1  // Track last scrolled character position
 
     var currentChapter: ArticleChapter {
         guard article.chapters.indices.contains(currentChapterIndex) else {
@@ -75,24 +75,27 @@ struct ArticleReaderView: View {
                         .padding(.vertical)
                     }
                     .onChange(of: tts.currentWordRange) { newRange in
-                        // Auto-scroll when TTS is playing
+                        // Auto-scroll when TTS is playing to keep spoken word visible
                         guard tts.isPlaying,
                               newRange.location != NSNotFound,
                               !currentChapter.content.isEmpty else { return }
 
-                        // Calculate progress through the text (0.0 to 1.0)
-                        let progress = Double(newRange.location) / Double(currentChapter.content.count)
+                        let currentPos = newRange.location
+                        let textLength = currentChapter.content.count
 
-                        // Only scroll every 5% to avoid constant scrolling
-                        let segment = Int(progress * 20) // 20 segments = 5% each
+                        // Only scroll if we've moved forward by ~200 characters or jumped backward
+                        // This keeps the word visible without constant micro-scrolling
+                        let movedForward = currentPos > lastScrolledCharPosition + 200
+                        let jumpedBackward = currentPos < lastScrolledCharPosition - 50
 
-                        if segment != lastScrolledPosition {
-                            lastScrolledPosition = segment
+                        if movedForward || jumpedBackward || lastScrolledCharPosition < 0 {
+                            lastScrolledCharPosition = currentPos
 
-                            // Scroll to content with anchor point based on progress
-                            // Keep content near top of screen (0.15 offset)
-                            let anchorY = max(0.0, min(progress - 0.15, 0.85))
-                            withAnimation(.easeInOut(duration: 0.4)) {
+                            // Calculate progress and position the spoken word ~25% from top
+                            let progress = Double(currentPos) / Double(textLength)
+                            let anchorY = max(0.0, min(progress - 0.08, 0.92))
+
+                            withAnimation(.easeInOut(duration: 0.5)) {
                                 scrollProxy.scrollTo("content", anchor: UnitPoint(x: 0.5, y: anchorY))
                             }
                         }
@@ -169,7 +172,7 @@ struct ArticleReaderView: View {
     private func loadChapterForTTS() {
         tts.stop()
         tts.loadText(currentChapter.content)
-        lastScrolledPosition = -1  // Reset scroll tracking for new chapter
+        lastScrolledCharPosition = -1  // Reset scroll tracking for new chapter
 
         // Restore position if this is the saved chapter
         if currentChapterIndex == article.lastReadChapter && article.lastReadPosition > 0 {
