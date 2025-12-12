@@ -54,6 +54,8 @@ struct ArticleReaderView: View {
                                 highlightRange: tts.currentWordRange,
                                 isPlaying: tts.isPlaying,
                                 onTapWord: { position in
+                                    // Reset scroll tracker so auto-scroll works from new position
+                                    lastScrolledCharPosition = position
                                     // Use seekAndPlay to avoid race conditions
                                     tts.seekAndPlay(to: position)
                                 }

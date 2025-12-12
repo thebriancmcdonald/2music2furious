@@ -178,12 +178,14 @@ class TTSManager: NSObject, ObservableObject {
         let nsLength = (currentText as NSString).length
         let targetPosition = max(0, min(characterPosition, nsLength))
 
-        // If currently speaking, we need to stop first and wait for cancel
-        if synthesizer.isSpeaking {
+        // Check both synthesizer state AND our isPlaying flag
+        // (synthesizer.isSpeaking can be false during gaps between words/chunks)
+        if synthesizer.isSpeaking || isPlaying {
             pendingSeekPosition = targetPosition
             shouldContinueChunks = false
             utteranceGeneration += 1
             synthesizer.stopSpeaking(at: .immediate)
+            isPlaying = false  // Update state immediately
             // The didCancel callback will start speaking from pendingSeekPosition
         } else {
             // Not speaking, can start immediately
