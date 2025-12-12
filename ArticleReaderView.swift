@@ -81,7 +81,8 @@ struct ArticleReaderView: View {
                               !currentChapter.content.isEmpty else { return }
 
                         let currentPos = newRange.location
-                        let textLength = currentChapter.content.count
+                        // Use NSString length to match NSRange positions from TTS
+                        let textLength = (currentChapter.content as NSString).length
 
                         // Only scroll if we've moved forward by ~200 characters or jumped backward
                         // This keeps the word visible without constant micro-scrolling
@@ -92,7 +93,7 @@ struct ArticleReaderView: View {
                             lastScrolledCharPosition = currentPos
 
                             // Calculate progress and position the spoken word ~25% from top
-                            let progress = Double(currentPos) / Double(textLength)
+                            let progress = Double(currentPos) / Double(max(textLength, 1))
                             let anchorY = max(0.0, min(progress - 0.08, 0.92))
 
                             withAnimation(.easeInOut(duration: 0.5)) {
@@ -589,6 +590,10 @@ struct TappableTextView: UIViewRepresentable {
         // Create attributed string
         let attributedString = NSMutableAttributedString(string: text)
 
+        // IMPORTANT: Use NSString length for NSRange operations (UTF-16 code units)
+        // Swift String.count uses grapheme clusters which differs for emoji/special chars
+        let nsTextLength = (text as NSString).length
+
         // Base style
         let paragraphStyle = NSMutableParagraphStyle()
         paragraphStyle.lineSpacing = 8
@@ -600,15 +605,15 @@ struct TappableTextView: UIViewRepresentable {
             .paragraphStyle: paragraphStyle
         ]
 
-        attributedString.addAttributes(baseAttributes, range: NSRange(location: 0, length: text.count))
+        attributedString.addAttributes(baseAttributes, range: NSRange(location: 0, length: nsTextLength))
 
         // Apply highlight ONLY to the current word (not everything after)
         // Cap highlight length to reasonable word size (max 50 chars)
         if isPlaying && highlightRange.location != NSNotFound && highlightRange.length > 0 {
-            let safeLocation = min(highlightRange.location, text.count)
+            let safeLocation = min(highlightRange.location, nsTextLength)
             // Cap length to actual word length, max 50 characters
             let maxWordLength = min(highlightRange.length, 50)
-            let safeLength = min(maxWordLength, max(0, text.count - safeLocation))
+            let safeLength = min(maxWordLength, max(0, nsTextLength - safeLocation))
 
             if safeLength > 0 {
                 let highlightAttributes: [NSAttributedString.Key: Any] = [
