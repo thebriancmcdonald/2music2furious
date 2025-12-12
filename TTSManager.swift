@@ -152,7 +152,7 @@ class TTSManager: NSObject, ObservableObject {
     /// Seek to a specific character position
     func seek(to characterPosition: Int) {
         let nsLength = (currentText as NSString).length
-        let wasPlaying = isPlaying
+        let wasPlaying = isPlaying || isPaused
         stop()
         currentCharacterPosition = max(0, min(characterPosition, nsLength))
         updateProgress()
@@ -163,6 +163,20 @@ class TTSManager: NSObject, ObservableObject {
         if wasPlaying {
             speak(from: currentCharacterPosition)
         }
+    }
+
+    /// Seek to position and always start playing (for tap-to-seek)
+    func seekAndPlay(to characterPosition: Int) {
+        let nsLength = (currentText as NSString).length
+        stop()
+        currentCharacterPosition = max(0, min(characterPosition, nsLength))
+        updateProgress()
+
+        // Rebuild chunks from new position
+        buildChunks(from: currentCharacterPosition)
+
+        // Always start playing
+        speak(from: currentCharacterPosition)
     }
 
     /// Seek to a percentage (0.0 to 1.0)

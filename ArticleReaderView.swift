@@ -54,10 +54,8 @@ struct ArticleReaderView: View {
                                 highlightRange: tts.currentWordRange,
                                 isPlaying: tts.isPlaying,
                                 onTapWord: { position in
-                                    tts.seek(to: position)
-                                    if !tts.isPlaying {
-                                        tts.play()
-                                    }
+                                    // Use seekAndPlay to avoid race conditions
+                                    tts.seekAndPlay(to: position)
                                 }
                             )
                             .id("content")
