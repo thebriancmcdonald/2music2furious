@@ -291,7 +291,7 @@ struct LocalBookDetailView: View {
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
     }
-    
+
     private func showToast(_ message: String) {
         toastMessage = message
         withAnimation { showingToast = true }
