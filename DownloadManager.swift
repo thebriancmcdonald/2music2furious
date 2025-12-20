@@ -3,6 +3,7 @@
 //  2 Music 2 Furious - MILESTONE 5
 //
 //  Manages podcast episode downloads
+//  PERFORMANCE UPDATE: Lazy loading for downloaded episodes list
 //
 
 import Foundation
@@ -14,16 +15,28 @@ class DownloadManager: ObservableObject {
     
     @Published var downloads: [String: Double] = [:] // episodeId -> progress (0-1)
     @Published var downloadedEpisodes: [String] = [] // Array of filenames
+    @Published var isLoaded = false
     
     private var activeTasks: [String: URLSessionDownloadTask] = [:]
     
+    // MARK: - LAZY LOADING: Empty init
+    
     init() {
+        // Downloaded episodes loaded lazily via loadIfNeeded()
+    }
+    
+    /// Call this before accessing downloadedEpisodes - loads from disk if not already loaded
+    func loadIfNeeded() {
+        guard !isLoaded else { return }
         loadDownloadedEpisodes()
+        isLoaded = true
     }
     
     // MARK: - Download Episode
     
     func downloadEpisode(_ episode: Episode, podcastTitle: String) {
+        loadIfNeeded()
+        
         let episodeId = episode.id.uuidString
         
         guard let url = URL(string: episode.audioUrl) else {
@@ -87,6 +100,7 @@ class DownloadManager: ObservableObject {
     // MARK: - Check Download Status
     
     func isDownloaded(filename: String) -> Bool {
+        loadIfNeeded()
         return downloadedEpisodes.contains(filename)
     }
     
@@ -97,6 +111,8 @@ class DownloadManager: ObservableObject {
     // MARK: - Delete Episode
     
     func deleteEpisode(filename: String) {
+        loadIfNeeded()
+        
         let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         let fileURL = documentsPath.appendingPathComponent(filename)
         

@@ -3,7 +3,7 @@
 //  2 Music 2 Furious
 //
 //  Article models and management for text-to-speech reader
-//  Pattern follows BookManager.swift for consistency
+//  PERFORMANCE UPDATE: Lazy loading for articles
 //
 
 import Foundation
@@ -25,13 +25,11 @@ struct ArticleChapter: Identifiable, Codable {
         self.htmlContent = htmlContent
     }
 
-    /// Estimated reading time in minutes (assuming ~200 words per minute)
     var estimatedReadingTime: Int {
         let wordCount = content.split(separator: " ").count
         return max(1, wordCount / 200)
     }
 
-    /// Word count for display
     var wordCount: Int {
         content.split(separator: " ").count
     }
@@ -42,13 +40,21 @@ struct ArticleChapter: Identifiable, Codable {
 struct Article: Identifiable, Codable {
     let id: UUID
     var title: String
-    var source: String               // Domain name or "Uploaded ePub", "Pasted Text", etc.
-    var sourceURL: URL?              // Original URL if from web
+    var source: String
+    var sourceURL: URL?
     var author: String?
     var chapters: [ArticleChapter]
     var dateAdded: Date
     var lastReadChapter: Int
-    var lastReadPosition: Int        // Character offset within chapter for TTS resume
+    var lastReadPosition: Int
+    
+    // UI Helper: Is this currently downloading?
+    var isDownloading: Bool = false
+    
+    // Coding keys to exclude 'isDownloading' from JSON persistence
+    enum CodingKeys: String, CodingKey {
+        case id, title, source, sourceURL, author, chapters, dateAdded, lastReadChapter, lastReadPosition
+    }
 
     init(
         id: UUID = UUID(),
@@ -72,30 +78,23 @@ struct Article: Identifiable, Codable {
         self.lastReadPosition = lastReadPosition
     }
 
-    /// Total word count across all chapters
     var totalWordCount: Int {
         chapters.reduce(0) { $0 + $1.wordCount }
     }
 
-    /// Total estimated reading time in minutes
     var totalReadingTime: Int {
-        let wordCount = totalWordCount
-        return max(1, wordCount / 200)
+        max(1, totalWordCount / 200)
     }
-
-    /// Formatted reading time string
+    
     var formattedReadingTime: String {
         let minutes = totalReadingTime
-        if minutes < 60 {
-            return "\(minutes) min read"
-        } else {
-            let hours = minutes / 60
-            let mins = minutes % 60
-            return mins > 0 ? "\(hours)h \(mins)m read" : "\(hours)h read"
-        }
+        if minutes < 60 { return "\(minutes) min read" }
+        let hours = minutes / 60
+        let mins = minutes % 60
+        return mins > 0 ? "\(hours)h \(mins)m read" : "\(hours)h read"
     }
-
-    /// Display-friendly source (extracts domain from URL or returns source string)
+    
+    // Display-friendly source
     var displaySource: String {
         if let url = sourceURL, let host = url.host {
             return host.replacingOccurrences(of: "www.", with: "")
@@ -109,149 +108,184 @@ struct Article: Identifiable, Codable {
 class ArticleManager: ObservableObject {
     static let shared = ArticleManager()
 
-    // App Group identifier - MUST match the App Group you create in Xcode
-    // Change this to your actual App Group identifier
+    // App Group identifier
     static let appGroupIdentifier = "group.com.2music2furious.shared"
 
     @Published var articles: [Article] = []
+    @Published var isLoaded = false
 
-    // Use App Group UserDefaults for sharing with Share Extension
     private let userDefaults: UserDefaults
     private let articlesKey = "savedArticles"
-    private let pendingArticlesKey = "pendingArticles"  // For articles added via Share Extension
+    private let pendingArticlesKey = "pendingArticles"
 
+    // MARK: - LAZY LOADING: Minimal init
+    
     init() {
-        // Try to use App Group UserDefaults, fall back to standard if not configured
+        // Set up userDefaults immediately (fast, no disk read)
         if let sharedDefaults = UserDefaults(suiteName: ArticleManager.appGroupIdentifier) {
             self.userDefaults = sharedDefaults
         } else {
-            print("ArticleManager: App Group not configured, using standard UserDefaults")
             self.userDefaults = UserDefaults.standard
         }
+        // Articles loaded lazily via loadIfNeeded()
+    }
+    
+    /// Call this before accessing articles - loads from disk if not already loaded
+    func loadIfNeeded() {
+        guard !isLoaded else { return }
         loadArticles()
-        migrateFromStandardUserDefaultsIfNeeded()
+        isLoaded = true
     }
 
-    /// Migrate articles from standard UserDefaults to App Group (one-time migration)
-    private func migrateFromStandardUserDefaultsIfNeeded() {
-        let standardDefaults = UserDefaults.standard
-        let migrationKey = "articlesMigratedToAppGroup"
+    // MARK: - Pending Article Processing
 
-        // Skip if already migrated or if we're using standard defaults anyway
-        guard !standardDefaults.bool(forKey: migrationKey),
-              userDefaults != standardDefaults else { return }
+    func checkForPendingArticles() {
+        loadIfNeeded()
+        
+        guard let data = userDefaults.data(forKey: pendingArticlesKey),
+              let pendingArticles = try? JSONDecoder().decode([Article].self, from: data),
+              !pendingArticles.isEmpty else { return }
 
-        // Check for old articles in standard UserDefaults
-        if let oldData = standardDefaults.data(forKey: articlesKey),
-           let oldArticles = try? JSONDecoder().decode([Article].self, from: oldData),
-           !oldArticles.isEmpty {
-            print("ArticleManager: Migrating \(oldArticles.count) articles to App Group storage")
-
-            // Merge old articles with any existing (avoid duplicates)
-            for oldArticle in oldArticles {
-                if !articles.contains(where: { $0.id == oldArticle.id }) {
-                    articles.append(oldArticle)
+        // 1. Merge new articles
+        var newArticlesCount = 0
+        for article in pendingArticles {
+            if !articles.contains(where: { $0.id == article.id }) {
+                articles.insert(article, at: 0)
+                newArticlesCount += 1
+                
+                // 2. Check if this is a "shell" article that needs downloading
+                if let url = article.sourceURL,
+                   (article.chapters.isEmpty || article.chapters.first?.content.isEmpty == true) {
+                    hydrateArticleContent(article)
                 }
             }
-
-            // Sort by date (newest first)
-            articles.sort { $0.dateAdded > $1.dateAdded }
-
-            // Save to App Group
-            saveArticles()
-
-            // Clear old storage
-            standardDefaults.removeObject(forKey: articlesKey)
         }
 
-        // Mark migration complete
-        standardDefaults.set(true, forKey: migrationKey)
-    }
-
-    /// Call this when the app becomes active to check for articles added via Share Extension
-    func checkForPendingArticles() {
-        if let data = userDefaults.data(forKey: pendingArticlesKey),
-           let pendingArticles = try? JSONDecoder().decode([Article].self, from: data),
-           !pendingArticles.isEmpty {
-            // Add pending articles
-            for article in pendingArticles {
-                if !articles.contains(where: { $0.id == article.id }) {
-                    articles.insert(article, at: 0)
-                }
-            }
-            // Clear pending articles
+        if newArticlesCount > 0 {
+            // Clear pending queue
             userDefaults.removeObject(forKey: pendingArticlesKey)
             saveArticles()
         }
     }
-
-    // MARK: - CRUD Operations
-
-    func addArticle(_ article: Article) {
-        articles.insert(article, at: 0) // Newest first
-        saveArticles()
-    }
-
-    func removeArticle(_ article: Article) {
-        articles.removeAll { $0.id == article.id }
-        saveArticles()
-    }
-
-    func updateArticle(_ article: Article) {
-        if let index = articles.firstIndex(where: { $0.id == article.id }) {
-            articles[index] = article
-            saveArticles()
+    
+    /// Background task to fetch content for "Shell" articles
+    private func hydrateArticleContent(_ article: Article) {
+        guard let url = article.sourceURL else { return }
+        
+        // Mark as downloading (optional UI indicator)
+        if let idx = articles.firstIndex(where: { $0.id == article.id }) {
+            var updated = articles[idx]
+            updated.isDownloading = true
+            articles[idx] = updated
+        }
+        
+        Task {
+            do {
+                let (title, content) = try await fetchAndParseURL(url)
+                
+                DispatchQueue.main.async {
+                    if let idx = self.articles.firstIndex(where: { $0.id == article.id }) {
+                        var updated = self.articles[idx]
+                        
+                        // Update title if the specific fetch found a better one
+                        if updated.title == "New Article" || updated.title == "Web Article" {
+                            updated.title = title
+                        }
+                        
+                        // Update content
+                        let newChapter = ArticleChapter(id: UUID(), title: title, content: content)
+                        updated.chapters = [newChapter]
+                        updated.isDownloading = false
+                        
+                        self.articles[idx] = updated
+                        self.saveArticles()
+                    }
+                }
+            } catch {
+                print("Failed to hydrate article: \(error)")
+                DispatchQueue.main.async {
+                    if let idx = self.articles.firstIndex(where: { $0.id == article.id }) {
+                        self.articles[idx].isDownloading = false
+                    }
+                }
+            }
         }
     }
 
-    // MARK: - Reading Progress
-
-    func updateProgress(articleId: UUID, chapterIndex: Int, position: Int) {
-        if let index = articles.firstIndex(where: { $0.id == articleId }) {
-            articles[index].lastReadChapter = chapterIndex
-            articles[index].lastReadPosition = position
-            saveArticles()
-        }
-    }
-
-    // MARK: - Article Creation Helpers
-
-    /// Creates an article from plain text (single chapter)
-    func createArticleFromText(title: String, text: String, source: String = "Pasted Text") -> Article {
-        let chapter = ArticleChapter(title: title, content: text)
-        return Article(
-            title: title,
-            source: source,
-            chapters: [chapter]
-        )
-    }
-
-    /// Creates an article from URL with extracted content
-    /// For now, this is a placeholder - real extraction will be added in Phase 3/4
-    func createArticleFromURL(url: URL, title: String, content: String, chapters: [ArticleChapter]? = nil) -> Article {
-        let articleChapters: [ArticleChapter]
-
-        if let chapters = chapters, !chapters.isEmpty {
-            articleChapters = chapters
-        } else {
-            // Single chapter from content
-            articleChapters = [ArticleChapter(title: title, content: content)]
+    // MARK: - Network / Parsing Logic
+    
+    private func fetchAndParseURL(_ url: URL) async throws -> (String, String) {
+        let (data, response) = try await URLSession.shared.data(from: url)
+        
+        guard let httpResponse = response as? HTTPURLResponse,
+              (200...299).contains(httpResponse.statusCode),
+              let html = String(data: data, encoding: .utf8) else {
+            throw URLError(.badServerResponse)
         }
 
-        return Article(
-            title: title,
-            source: url.host ?? "Web",
-            sourceURL: url,
-            chapters: articleChapters
-        )
-    }
+        // 1. Extract Title
+        var title = "Web Article"
+        if let titleMatch = html.range(of: "<title[^>]*>(.*?)</title>", options: .regularExpression) {
+            title = String(html[titleMatch])
+                .replacingOccurrences(of: "<title[^>]*>", with: "", options: .regularExpression)
+                .replacingOccurrences(of: "</title>", with: "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        
+        // Cleanup title
+        if let pipeRange = title.range(of: " | ") { title = String(title[..<pipeRange.lowerBound]) }
+        if let dashRange = title.range(of: " - ", options: .backwards) {
+            let beforeDash = String(title[..<dashRange.lowerBound])
+            if beforeDash.count > 10 { title = beforeDash }
+        }
 
-    /// Splits content into chapters based on HTML headers (h2, h3)
-    /// Returns array of chapters, or single chapter if no headers found
+        // 2. Extract Content (Simple Heuristic)
+        var content = html
+        let contentPatterns = ["<article[^>]*>([\\s\\S]*?)</article>", "<main[^>]*>([\\s\\S]*?)</main>"]
+        
+        for pattern in contentPatterns {
+            if let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive),
+               let match = regex.firstMatch(in: html, range: NSRange(html.startIndex..., in: html)),
+               let range = Range(match.range(at: 1), in: html) {
+                content = String(html[range])
+                break
+            }
+        }
+
+        // 3. Clean Content
+        let removePatterns = [
+            "<script[^>]*>[\\s\\S]*?</script>", "<style[^>]*>[\\s\\S]*?</style>",
+            "<nav[^>]*>[\\s\\S]*?</nav>", "<footer[^>]*>[\\s\\S]*?</footer>",
+            "<header[^>]*>[\\s\\S]*?</header>"
+        ]
+        for pattern in removePatterns {
+            content = content.replacingOccurrences(of: pattern, with: "", options: .regularExpression)
+        }
+
+        content = content.replacingOccurrences(of: "<br[^>]*>", with: "\n", options: .regularExpression)
+        content = content.replacingOccurrences(of: "</p>", with: "\n\n", options: .caseInsensitive)
+        content = content.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+        
+        // Decode Entities
+        content = content
+            .replacingOccurrences(of: "&nbsp;", with: " ")
+            .replacingOccurrences(of: "&amp;", with: "&")
+            .replacingOccurrences(of: "&lt;", with: "<")
+            .replacingOccurrences(of: "&gt;", with: ">")
+            .replacingOccurrences(of: "&quot;", with: "\"")
+            .replacingOccurrences(of: "&#39;", with: "'")
+
+        content = content.replacingOccurrences(of: "\n{3,}", with: "\n\n", options: .regularExpression)
+        content = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        
+        if content.isEmpty { content = "Could not extract content from this page." }
+
+        return (title, content)
+    }
+    
+    // MARK: - UI Helper Logic
+    
     func splitIntoChapters(title: String, content: String, html: String? = nil) -> [ArticleChapter] {
-        // For now, simple implementation - look for markdown-style headers
-        // Real HTML parsing will come in Phase 3
-
         let lines = content.components(separatedBy: "\n")
         var chapters: [ArticleChapter] = []
         var currentTitle = title
@@ -260,14 +294,12 @@ class ArticleManager: ObservableObject {
         for line in lines {
             // Check for markdown headers (## or ###)
             if line.hasPrefix("## ") || line.hasPrefix("### ") {
-                // Save previous chapter if it has content
                 if !currentContent.isEmpty {
                     let chapterText = currentContent.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
                     if !chapterText.isEmpty {
                         chapters.append(ArticleChapter(title: currentTitle, content: chapterText))
                     }
                 }
-                // Start new chapter
                 currentTitle = line.replacingOccurrences(of: "### ", with: "")
                     .replacingOccurrences(of: "## ", with: "")
                     .trimmingCharacters(in: .whitespaces)
@@ -277,7 +309,6 @@ class ArticleManager: ObservableObject {
             }
         }
 
-        // Don't forget the last chapter
         if !currentContent.isEmpty {
             let chapterText = currentContent.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
             if !chapterText.isEmpty {
@@ -285,12 +316,47 @@ class ArticleManager: ObservableObject {
             }
         }
 
-        // If no chapters were created, make one from all content
         if chapters.isEmpty {
             chapters.append(ArticleChapter(title: title, content: content))
         }
 
         return chapters
+    }
+
+    // MARK: - CRUD Operations
+
+    func addArticle(_ article: Article) {
+        loadIfNeeded()
+        articles.insert(article, at: 0)
+        saveArticles()
+    }
+
+    func removeArticle(_ article: Article) {
+        loadIfNeeded()
+        articles.removeAll { $0.id == article.id }
+        saveArticles()
+    }
+
+    func updateArticle(_ article: Article) {
+        loadIfNeeded()
+        if let index = articles.firstIndex(where: { $0.id == article.id }) {
+            articles[index] = article
+            saveArticles()
+        }
+    }
+
+    func updateProgress(articleId: UUID, chapterIndex: Int, position: Int) {
+        loadIfNeeded()
+        if let index = articles.firstIndex(where: { $0.id == articleId }) {
+            articles[index].lastReadChapter = chapterIndex
+            articles[index].lastReadPosition = position
+            saveArticles()
+        }
+    }
+
+    func createArticleFromText(title: String, text: String, source: String = "Pasted Text") -> Article {
+        let chapter = ArticleChapter(title: title, content: text)
+        return Article(title: title, source: source, chapters: [chapter])
     }
 
     // MARK: - Persistence

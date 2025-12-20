@@ -1,9 +1,9 @@
 //
 //  BookManager.swift
-//  2 Music 2 Furious - MILESTONE 11
+//  2 Music 2 Furious - MILESTONE 14
 //
 //  Shared Models, Download Logic, and Book Management
-//  PERFORMANCE: Added duration caching to avoid repeated AVAsset creation
+//  FIXED: Reverted to synchronous metadata loading to fix build errors
 //
 
 import Foundation
@@ -13,7 +13,7 @@ import AVFoundation
 
 // MARK: - Shared Models
 
-struct LibriVoxChapter: Identifiable, Codable {
+struct LibriVoxChapter: Identifiable, Codable, Hashable {
     let id: String
     let title: String
     let listenUrl: String
@@ -26,11 +26,7 @@ struct LibriVoxChapter: Identifiable, Codable {
         let h = seconds / 3600
         let m = (seconds % 3600) / 60
         let s = seconds % 60
-        if h > 0 {
-            return String(format: "%d:%02d:%02d", h, m, s)
-        } else {
-            return String(format: "%d:%02d", m, s)
-        }
+        return h > 0 ? String(format: "%d:%02d:%02d", h, m, s) : String(format: "%d:%02d", m, s)
     }
     
     enum CodingKeys: String, CodingKey {
@@ -39,30 +35,28 @@ struct LibriVoxChapter: Identifiable, Codable {
         case listenUrl = "listen_url"
         case playtime
     }
+    
+    func hash(into hasher: inout Hasher) { hasher.combine(id) }
 }
 
 struct LibriVoxAuthor: Codable {
     let firstName: String
     let lastName: String
-    
     enum CodingKeys: String, CodingKey {
         case firstName = "first_name"
         case lastName = "last_name"
     }
 }
 
-struct Book: Identifiable, Codable {
+struct Book: Identifiable, Codable, Hashable {
     var id = UUID()
     let title: String
     var author: String? = nil
     var description: String? = nil
-    
     var chapters: [Track]
-    
     var librivoxChapters: [LibriVoxChapter]? = nil
     var coverArtUrl: URL? = nil
     var coverArtData: Data? = nil
-    
     var currentChapterIndex: Int = 0
     var lastPlayedPosition: Double = 0
     let dateAdded: Date
@@ -78,20 +72,20 @@ struct Book: Identifiable, Codable {
     }
     
     var displayAuthor: String { author ?? "Unknown Author" }
+    
+    func hash(into hasher: inout Hasher) { hasher.combine(id) }
+    static func == (lhs: Book, rhs: Book) -> Bool { lhs.id == rhs.id }
 }
 
-// MARK: - Download Manager (Shared)
+// MARK: - Download Manager
 
 class LibriVoxDownloadManager: ObservableObject {
     static let shared = LibriVoxDownloadManager()
-    
     @Published var downloadProgress: [String: Double] = [:]
     @Published var downloadingBookId: String?
     @Published var completedChapters: Set<String> = []
     
-    private func compositeId(bookId: String, chapterId: String) -> String {
-        return "\(bookId)_\(chapterId)"
-    }
+    private func compositeId(bookId: String, chapterId: String) -> String { "\(bookId)_\(chapterId)" }
     
     func downloadSingleChapter(chapter: LibriVoxChapter, bookId: String, bookTitle: String, author: String, coverUrl: URL?, description: String?, index: Int, bookManager: BookManager, fullChapterList: [LibriVoxChapter]? = nil) {
         let uniqueId = compositeId(bookId: bookId, chapterId: chapter.id)
@@ -104,33 +98,18 @@ class LibriVoxDownloadManager: ObservableObject {
                 
                 if let track = track {
                     self.completedChapters.insert(uniqueId)
-                    
                     if let existingIndex = bookManager.books.firstIndex(where: { $0.title == bookTitle }) {
                         var existingBook = bookManager.books[existingIndex]
                         if !existingBook.chapters.contains(where: { $0.filename == track.filename }) {
                             existingBook.chapters.append(track)
-                            existingBook.chapters.sort { t1, t2 in
-                                let num1 = self.extractChapterNumber(from: t1.filename)
-                                let num2 = self.extractChapterNumber(from: t2.filename)
-                                return num1 < num2
-                            }
+                            existingBook.chapters.sort { $0.filename < $1.filename }
                         }
                         if existingBook.librivoxChapters == nil { existingBook.librivoxChapters = fullChapterList }
-                        if existingBook.description == nil { existingBook.description = description }
-                        if existingBook.author == nil { existingBook.author = author }
                         if existingBook.coverArtUrl == nil { existingBook.coverArtUrl = coverUrl }
                         bookManager.books[existingIndex] = existingBook
                         bookManager.saveBooks()
                     } else {
-                        let newBook = Book(
-                            title: bookTitle,
-                            author: author,
-                            description: description,
-                            chapters: [track],
-                            librivoxChapters: fullChapterList,
-                            coverArtUrl: coverUrl,
-                            dateAdded: Date()
-                        )
+                        let newBook = Book(title: bookTitle, author: author, description: description, chapters: [track], librivoxChapters: fullChapterList, coverArtUrl: coverUrl, dateAdded: Date())
                         bookManager.addBook(newBook)
                     }
                 }
@@ -140,38 +119,20 @@ class LibriVoxDownloadManager: ObservableObject {
     
     private func downloadChapter(chapter: LibriVoxChapter, bookTitle: String, author: String, index: Int, completion: @escaping (Track?) -> Void) {
         guard let url = URL(string: chapter.listenUrl) else { completion(nil); return }
-        URLSession.shared.downloadTask(with: url) { [weak self] tempURL, _, _ in
+        URLSession.shared.downloadTask(with: url) { tempURL, _, _ in
             guard let tempURL = tempURL else { completion(nil); return }
             let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-            let filename = self?.sanitizeFilename("\(bookTitle)_Chapter_\(String(format: "%03d", index + 1))_\(chapter.title).mp3") ?? "chapter.mp3"
+            let filename = "\(bookTitle)_Chapter_\(String(format: "%03d", index + 1))_\(chapter.title).mp3"
+                .components(separatedBy: CharacterSet(charactersIn: ":/\\?%*|\"<>")).joined(separator: "_")
             let destinationURL = documentsPath.appendingPathComponent(filename)
             try? FileManager.default.removeItem(at: destinationURL)
             try? FileManager.default.moveItem(at: tempURL, to: destinationURL)
-            let track = Track(title: chapter.title, artist: author, filename: filename)
-            completion(track)
+            completion(Track(title: chapter.title, artist: author, filename: filename))
         }.resume()
     }
     
-    private func sanitizeFilename(_ name: String) -> String {
-        let invalid = CharacterSet(charactersIn: ":/\\?%*|\"<>")
-        return name.components(separatedBy: invalid).joined(separator: "_")
-    }
-    
-    private func extractChapterNumber(from filename: String) -> Int {
-        if let range = filename.range(of: "_Chapter_\\d{3}_", options: .regularExpression) {
-            let numberStr = filename[range].replacingOccurrences(of: "_Chapter_", with: "").replacingOccurrences(of: "_", with: "")
-            return Int(numberStr) ?? 0
-        }
-        return 0
-    }
-    
-    func isDownloading(bookId: String, chapterId: String) -> Bool {
-        downloadProgress[compositeId(bookId: bookId, chapterId: chapterId)] != nil
-    }
-    
-    func isCompleted(bookId: String, chapterId: String) -> Bool {
-        completedChapters.contains(compositeId(bookId: bookId, chapterId: chapterId))
-    }
+    func isDownloading(bookId: String, chapterId: String) -> Bool { downloadProgress[compositeId(bookId: bookId, chapterId: chapterId)] != nil }
+    func isCompleted(bookId: String, chapterId: String) -> Bool { completedChapters.contains(compositeId(bookId: bookId, chapterId: chapterId)) }
 }
 
 // MARK: - Book Manager
@@ -179,68 +140,53 @@ class LibriVoxDownloadManager: ObservableObject {
 class BookManager: ObservableObject {
     static let shared = BookManager()
     @Published var books: [Book] = []
+    @Published var isLoaded = false
+    @Published var calculatedDurations: [String: String] = [:]
+    
     private let userDefaults = UserDefaults.standard
     private let booksKey = "savedBooks"
+    private let durationsKey = "cachedDurations"
+    private let calculationQueue = DispatchQueue(label: "durationCalculation", qos: .utility)
     
-    // PERFORMANCE: Duration cache to avoid repeated AVAsset creation
-    private var durationCache: [String: String] = [:]
-    private let cacheQueue = DispatchQueue(label: "durationCache", attributes: .concurrent)
+    init() {
+        if let cached = userDefaults.dictionary(forKey: durationsKey) as? [String: String] { calculatedDurations = cached }
+    }
     
-    init() { loadBooks() }
-    
-    // MARK: - Duration Calculation (Cached)
+    func loadIfNeeded() {
+        guard !isLoaded else { return }
+        if let data = userDefaults.data(forKey: booksKey), let decoded = try? JSONDecoder().decode([Book].self, from: data) { books = decoded }
+        isLoaded = true
+    }
     
     func getTrackDuration(track: Track) -> String {
-        // Thread-safe cache read
-        var cached: String?
-        cacheQueue.sync {
-            cached = durationCache[track.filename]
-        }
-        if let cached = cached {
-            return cached
-        }
-        
-        // Calculate duration
-        let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        let fileURL = documentsPath.appendingPathComponent(track.filename)
-        
-        // Check if file exists first
-        guard FileManager.default.fileExists(atPath: fileURL.path) else {
-            return "--:--"
-        }
-        
-        let asset = AVURLAsset(url: fileURL)
-        let duration = asset.duration.seconds
-        
-        let result: String
-        if duration.isNaN || duration.isZero {
-            result = "--:--"
-        } else {
-            let seconds = Int(duration)
-            let h = seconds / 3600
-            let m = (seconds % 3600) / 60
-            let s = seconds % 60
-            result = h > 0 ? String(format: "%d:%02d:%02d", h, m, s) : String(format: "%d:%02d", m, s)
-        }
-        
-        // Thread-safe cache write
-        cacheQueue.async(flags: .barrier) {
-            self.durationCache[track.filename] = result
-        }
-        
-        return result
+        if let cached = calculatedDurations[track.filename] { return cached }
+        calculateDurationAsync(for: track)
+        return "--:--"
     }
     
-    // Clear cache when files change
-    func clearDurationCache() {
-        cacheQueue.async(flags: .barrier) {
-            self.durationCache.removeAll()
-        }
+    func preloadDurations(for book: Book) {
+        for track in book.chapters { if calculatedDurations[track.filename] == nil { calculateDurationAsync(for: track) } }
     }
     
-    func clearDurationCache(for filename: String) {
-        cacheQueue.async(flags: .barrier) {
-            self.durationCache.removeValue(forKey: filename)
+    private func calculateDurationAsync(for track: Track) {
+        let filename = track.filename
+        calculationQueue.async { [weak self] in
+            guard let self = self else { return }
+            let fileURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent(filename)
+            var result = "--:--"
+            if FileManager.default.fileExists(atPath: fileURL.path) {
+                let asset = AVURLAsset(url: fileURL)
+                // Use deprecated but synchronous property to avoid async/await issues
+                let duration = asset.duration.seconds
+                if !duration.isNaN && !duration.isZero {
+                    let s = Int(duration)
+                    result = s >= 3600 ? String(format: "%d:%02d:%02d", s/3600, (s%3600)/60, s%60) : String(format: "%d:%02d", (s%3600)/60, s%60)
+                }
+            }
+            DispatchQueue.main.async {
+                self.calculatedDurations[filename] = result
+                self.userDefaults.set(self.calculatedDurations, forKey: self.durationsKey)
+            }
         }
     }
     
@@ -254,38 +200,29 @@ class BookManager: ObservableObject {
         for track in tracks {
             if let baseName = detectBaseName(from: track.filename) {
                 groupedByBase[baseName, default: []].append(track)
-            } else {
-                ungroupedTracks.append(track)
-            }
+            } else { ungroupedTracks.append(track) }
         }
         
         for (baseName, chapters) in groupedByBase {
             if chapters.count >= 2 {
-                let sortedChapters = chapters.sorted { track1, track2 in
-                    extractChapterNumber(from: track1.filename) < extractChapterNumber(from: track2.filename)
-                }
-                let artData = extractArtwork(from: sortedChapters.first?.filename)
-                let artist = sortedChapters.first?.artist
-                let book = Book(title: baseName, author: artist, description: nil, chapters: sortedChapters, coverArtData: artData, dateAdded: Date())
-                detectedBooks.append(book)
-            } else {
-                ungroupedTracks.append(contentsOf: chapters)
-            }
+                let sorted = chapters.sorted { $0.filename < $1.filename }
+                let artData = extractArtwork(from: sorted.first?.filename)
+                detectedBooks.append(Book(title: baseName, author: sorted.first?.artist, description: nil, chapters: sorted, coverArtData: artData, dateAdded: Date()))
+            } else { ungroupedTracks.append(contentsOf: chapters) }
         }
         
         for track in ungroupedTracks {
             let artData = extractArtwork(from: track.filename)
-            let book = Book(title: track.title, author: track.artist, description: nil, chapters: [track], coverArtData: artData, dateAdded: Date())
-            detectedBooks.append(book)
+            detectedBooks.append(Book(title: track.title, author: track.artist, description: nil, chapters: [track], coverArtData: artData, dateAdded: Date()))
         }
         return detectedBooks
     }
     
     private func extractArtwork(from filename: String?) -> Data? {
         guard let filename = filename else { return nil }
-        let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        let fileURL = documentsPath.appendingPathComponent(filename)
+        let fileURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent(filename)
         let asset = AVURLAsset(url: fileURL)
+        // Use deprecated but synchronous property to avoid async/await issues
         for item in asset.commonMetadata {
             if item.commonKey == .commonKeyArtwork, let data = item.dataValue { return data }
         }
@@ -294,100 +231,45 @@ class BookManager: ObservableObject {
     
     private func detectBaseName(from filename: String) -> String? {
         let name = filename.replacingOccurrences(of: "\\.(mp3|m4a|m4b)$", with: "", options: .regularExpression)
-        let patterns = ["(.+?)[-_\\s]*(Chapter|Ch|Part|Pt)[-_\\s]*\\d+", "(.+?)[-_\\s]*\\d{2,3}", "(.+?)[-_\\s]*\\(\\d+\\)"]
-        for pattern in patterns {
-            if let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive),
-               let match = regex.firstMatch(in: name, range: NSRange(name.startIndex..., in: name)),
-               let range = Range(match.range(at: 1), in: name) {
-                return String(name[range]).trimmingCharacters(in: .whitespaces)
-            }
+        if let regex = try? NSRegularExpression(pattern: "(.+?)[-_\\s]*(Chapter|Ch|Part|Pt)[-_\\s]*\\d+", options: .caseInsensitive),
+           let match = regex.firstMatch(in: name, range: NSRange(name.startIndex..., in: name)),
+           let range = Range(match.range(at: 1), in: name) {
+            return String(name[range]).trimmingCharacters(in: .whitespaces)
         }
         return nil
     }
     
-    private func extractChapterNumber(from filename: String) -> Int {
-        let patterns = ["Chapter[-_\\s]*(\\d+)", "Ch[-_\\s]*(\\d+)", "Part[-_\\s]*(\\d+)", "Pt[-_\\s]*(\\d+)", "\\((\\d+)\\)", "[-_\\s](\\d{2,3})\\.(mp3|m4a|m4b)$"]
-        for pattern in patterns {
-            if let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive),
-               let match = regex.firstMatch(in: filename, range: NSRange(filename.startIndex..., in: filename)),
-               let range = Range(match.range(at: 1), in: filename),
-               let number = Int(filename[range]) {
-                return number
-            }
-        }
-        return 0
-    }
-    
-    // MARK: - Book Management
-    
-    func addBook(_ book: Book) {
-        books.append(book)
-        saveBooks()
-    }
+    func addBook(_ book: Book) { loadIfNeeded(); books.append(book); saveBooks() }
     
     func removeBook(_ book: Book) {
-        let fileManager = FileManager.default
-        let documentsPath = fileManager.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        loadIfNeeded()
+        let fm = FileManager.default
+        let docs = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
         for chapter in book.chapters {
-            let fileURL = documentsPath.appendingPathComponent(chapter.filename)
-            try? fileManager.removeItem(at: fileURL)
-            clearDurationCache(for: chapter.filename)
+            try? fm.removeItem(at: docs.appendingPathComponent(chapter.filename))
+            calculatedDurations.removeValue(forKey: chapter.filename)
         }
         books.removeAll { $0.id == book.id }
         saveBooks()
     }
     
-    func deleteChapter(at offsets: IndexSet, from book: Book) {
-        guard let bookIndex = books.firstIndex(where: { $0.id == book.id }) else { return }
-        var updatedBook = books[bookIndex]
-        let fileManager = FileManager.default
-        let documentsPath = fileManager.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        
-        for index in offsets {
-            if index < updatedBook.chapters.count {
-                let chapter = updatedBook.chapters[index]
-                let fileURL = documentsPath.appendingPathComponent(chapter.filename)
-                try? fileManager.removeItem(at: fileURL)
-                clearDurationCache(for: chapter.filename)
-            }
-        }
-        
-        updatedBook.chapters.remove(atOffsets: offsets)
-        
-        if updatedBook.chapters.isEmpty && (updatedBook.librivoxChapters == nil || updatedBook.librivoxChapters!.isEmpty) {
-            removeBook(updatedBook)
-        } else {
-            if updatedBook.currentChapterIndex >= updatedBook.chapters.count {
-                updatedBook.currentChapterIndex = max(0, updatedBook.chapters.count - 1)
-            }
-            books[bookIndex] = updatedBook
-            saveBooks()
-        }
-    }
-    
     func deleteChapterFile(filename: String, from book: Book) {
+        loadIfNeeded()
         guard let index = book.chapters.firstIndex(where: { $0.filename == filename }) else { return }
-        deleteChapter(at: IndexSet(integer: index), from: book)
-    }
-    
-    func updateProgress(bookId: UUID, chapterIndex: Int, position: Double) {
-        if let index = books.firstIndex(where: { $0.id == bookId }) {
-            books[index].currentChapterIndex = chapterIndex
-            books[index].lastPlayedPosition = position
-            saveBooks()
+        if let bookIndex = books.firstIndex(where: { $0.id == book.id }) {
+            var updatedBook = books[bookIndex]
+            try? FileManager.default.removeItem(at: FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent(filename))
+            updatedBook.chapters.remove(at: index)
+            if updatedBook.chapters.isEmpty && (updatedBook.librivoxChapters == nil || updatedBook.librivoxChapters!.isEmpty) {
+                removeBook(updatedBook)
+            } else {
+                books[bookIndex] = updatedBook
+                saveBooks()
+            }
         }
     }
     
     func saveBooks() {
-        if let encoded = try? JSONEncoder().encode(books) {
-            userDefaults.set(encoded, forKey: booksKey)
-        }
-    }
-    
-    private func loadBooks() {
-        if let data = userDefaults.data(forKey: booksKey),
-           let decoded = try? JSONDecoder().decode([Book].self, from: data) {
-            books = decoded
-        }
+        if let encoded = try? JSONEncoder().encode(books) { userDefaults.set(encoded, forKey: booksKey) }
     }
 }

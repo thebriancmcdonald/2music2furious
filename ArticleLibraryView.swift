@@ -1,9 +1,10 @@
 //
 //  ArticleLibraryView.swift
-//  2 Music 2 Furious
+//  2 Music 2 Furious - MILESTONE 12
 //
 //  Article library for text-to-speech reader
 //  Pattern follows BookLibraryView.swift for consistency
+//  UPDATED: NavigationStack for modern navigation
 //
 
 import SwiftUI
@@ -31,7 +32,7 @@ struct ArticleLibraryView: View {
     @State private var textContent = ""
 
     var body: some View {
-        NavigationView {
+        NavigationStack {
             ZStack {
                 GlassBackgroundView()
 
@@ -339,7 +340,7 @@ struct AddURLSheet: View {
     let onCancel: () -> Void
 
     var body: some View {
-        NavigationView {
+        NavigationStack {
             ZStack {
                 GlassBackgroundView()
 
@@ -348,7 +349,7 @@ struct AddURLSheet: View {
                         Text("Article URL")
                             .font(.headline)
 
-                        TextField("", text: $urlInput, prompt: Text("example.com/article").foregroundColor(.secondary))
+                        TextField("https://example.com/article", text: $urlInput)
                             .textFieldStyle(.plain)
                             .keyboardType(.URL)
                             .textContentType(.URL)
@@ -406,7 +407,7 @@ struct AddTextSheet: View {
     let onCancel: () -> Void
 
     var body: some View {
-        NavigationView {
+        NavigationStack {
             ZStack {
                 GlassBackgroundView()
 

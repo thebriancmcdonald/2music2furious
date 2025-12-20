@@ -3,7 +3,7 @@
 //  2 Music 2 Furious
 //
 //  API Manager for Radio Browser
-//  Updates: Infinite Scrolling (Pagination)
+//  PERFORMANCE UPDATE: Lazy loading for favorites
 //
 
 import Foundation
@@ -39,6 +39,7 @@ class RadioBrowserAPI: ObservableObject {
     @Published var isLoadingMore = false // For bottom spinner
     @Published var favoriteStations: [RadioStation] = []
     @Published var hasMorePages = true // Stop if API returns empty
+    @Published var isLoaded = false
     
     private let baseURL = "https://de1.api.radio-browser.info/json"
     private var currentOffset = 0
@@ -50,8 +51,17 @@ class RadioBrowserAPI: ObservableObject {
     private var lastQueryCountry: String?
     private var lastQueryBitrate: Int?
     
+    // MARK: - LAZY LOADING: Empty init
+    
     init() {
+        // Favorites loaded lazily via loadIfNeeded()
+    }
+    
+    /// Call this before accessing favorites - loads from disk if not already loaded
+    func loadIfNeeded() {
+        guard !isLoaded else { return }
         loadFavorites()
+        isLoaded = true
     }
     
     // MARK: - Advanced Search (Resets List)
@@ -119,7 +129,7 @@ class RadioBrowserAPI: ObservableObject {
             return
         }
         
-        print("ðŸ“¡ Fetching: \(url.absoluteString)")
+        print("📡 Fetching: \(url.absoluteString)")
         
         URLSession.shared.dataTask(with: url) { [weak self] data, response, error in
             DispatchQueue.main.async {
@@ -166,6 +176,7 @@ class RadioBrowserAPI: ObservableObject {
     // MARK: - Favorites
     
     func toggleFavorite(_ station: RadioStation) {
+        loadIfNeeded()
         if isFavorite(station) {
             favoriteStations.removeAll { $0.id == station.id }
         } else {
@@ -175,7 +186,8 @@ class RadioBrowserAPI: ObservableObject {
     }
     
     func isFavorite(_ station: RadioStation) -> Bool {
-        favoriteStations.contains { $0.id == station.id }
+        loadIfNeeded()
+        return favoriteStations.contains { $0.id == station.id }
     }
     
     private func saveFavorites() {

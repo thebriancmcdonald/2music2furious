@@ -2,8 +2,8 @@
 //  SharedComponents.swift
 //  2 Music 2 Furious - MILESTONE 11
 //
-//  Unified Glass UI Components for consistent Apple-style design
-//  Consolidates: Toast, Search Bar, Empty State, Description, Artwork, Headers, Rows
+//  Unified Glass UI Components
+//  FIXED: Added GlassPlusButton so MusicLibrary builds
 //
 
 import SwiftUI
@@ -11,36 +11,27 @@ import MediaPlayer
 
 // MARK: - SYSTEMIC COLOR LOGIC
 extension Color {
-    // 1. MASTER THEME COLOR
     static let brandPrimary = Color.purple
-    
-    // 2. SEMANTIC NAMES
     static let royalPurple = brandPrimary
-    
-    // 3. AUTOMATIC DARK VARIANT
     static let deepResumePurple = brandPrimary.mix(with: .black, by: 0.4)
     
-    // Helper: Mixes two colors together
     func mix(with other: Color, by amount: Double) -> Color {
         let uiColor1 = UIColor(self)
         let uiColor2 = UIColor(other)
-        
         var r1: CGFloat = 0, g1: CGFloat = 0, b1: CGFloat = 0, a1: CGFloat = 0
         var r2: CGFloat = 0, g2: CGFloat = 0, b2: CGFloat = 0, a2: CGFloat = 0
-        
         uiColor1.getRed(&r1, green: &g1, blue: &b1, alpha: &a1)
         uiColor2.getRed(&r2, green: &g2, blue: &b2, alpha: &a2)
-        
-        let r = r1 * CGFloat(1 - amount) + r2 * CGFloat(amount)
-        let g = g1 * CGFloat(1 - amount) + g2 * CGFloat(amount)
-        let b = b1 * CGFloat(1 - amount) + b2 * CGFloat(amount)
-        let a = a1 * CGFloat(1 - amount) + a2 * CGFloat(amount)
-        
-        return Color(UIColor(red: r, green: g, blue: b, alpha: a))
+        return Color(UIColor(
+            red: r1 * CGFloat(1 - amount) + r2 * CGFloat(amount),
+            green: g1 * CGFloat(1 - amount) + g2 * CGFloat(amount),
+            blue: b1 * CGFloat(1 - amount) + b2 * CGFloat(amount),
+            alpha: a1 * CGFloat(1 - amount) + a2 * CGFloat(amount)
+        ))
     }
 }
 
-// MARK: - Glass Toast View (Universal)
+// MARK: - Glass Toast View
 
 struct GlassToastView: View {
     let message: String
@@ -49,17 +40,11 @@ struct GlassToastView: View {
     
     var body: some View {
         HStack(spacing: 10) {
-            Image(systemName: icon)
-                .foregroundColor(iconColor)
-            Text(message)
-                .font(.subheadline.weight(.medium))
-                .foregroundColor(.primary)
-                .lineLimit(1)
+            Image(systemName: icon).foregroundColor(iconColor)
+            Text(message).font(.subheadline.weight(.medium)).foregroundColor(.primary).lineLimit(1)
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 12)
-        .background(.thinMaterial)
-        .clipShape(Capsule())
+        .padding(.horizontal, 20).padding(.vertical, 12)
+        .background(.thinMaterial).clipShape(Capsule())
         .shadow(color: .black.opacity(0.15), radius: 10, x: 0, y: 5)
     }
 }
@@ -74,37 +59,22 @@ struct GlassSearchBar: View {
     
     var body: some View {
         HStack {
-            Image(systemName: "magnifyingglass")
-                .foregroundColor(.secondary)
-            
-            TextField(placeholder, text: $text, onCommit: onCommit)
-                .submitLabel(.search)
-            
+            Image(systemName: "magnifyingglass").foregroundColor(.secondary)
+            TextField(placeholder, text: $text, onCommit: onCommit).submitLabel(.search)
             if !text.isEmpty {
-                Button(action: {
-                    text = ""
-                    onClear?()
-                }) {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundColor(.secondary)
-                        .frame(width: 44, height: 44) // HIT TARGET FIX
-                        .contentShape(Rectangle())
+                Button(action: { text = ""; onClear?() }) {
+                    Image(systemName: "xmark.circle.fill").foregroundColor(.secondary)
+                        .frame(width: 44, height: 44).contentShape(Rectangle())
                 }
             }
         }
-        .padding(.leading, 10)
-        .padding(.trailing, text.isEmpty ? 10 : 0)
-        .padding(.vertical, 6)
-        .background(.ultraThinMaterial)
-        .cornerRadius(12)
-        .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(Color.white.opacity(0.2), lineWidth: 1)
-        )
+        .padding(.leading, 10).padding(.trailing, text.isEmpty ? 10 : 0).padding(.vertical, 6)
+        .background(.ultraThinMaterial).cornerRadius(12)
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.2), lineWidth: 1))
     }
 }
 
-// MARK: - Glass Empty State View
+// MARK: - Glass Empty State
 
 struct GlassEmptyStateView: View {
     let icon: String
@@ -115,63 +85,39 @@ struct GlassEmptyStateView: View {
     var body: some View {
         VStack(spacing: 24) {
             Spacer()
-            
             ZStack {
-                Circle()
-                    .fill(.ultraThinMaterial)
-                    .frame(width: 120, height: 120)
-                Image(systemName: icon)
-                    .font(.system(size: 50))
-                    .foregroundColor(.secondary)
+                Circle().fill(.ultraThinMaterial).frame(width: 120, height: 120)
+                Image(systemName: icon).font(.system(size: 50)).foregroundColor(.secondary)
             }
-            
             VStack(spacing: 8) {
-                Text(title)
-                    .font(.title3.weight(.semibold))
+                Text(title).font(.title3.weight(.semibold))
                 if let subtitle = subtitle {
-                    Text(subtitle)
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                        .multilineTextAlignment(.center)
+                    Text(subtitle).font(.subheadline).foregroundColor(.secondary).multilineTextAlignment(.center)
                 }
-            }
-            .padding(.horizontal)
+            }.padding(.horizontal)
             
             if !actions.isEmpty {
                 HStack(spacing: 16) {
                     ForEach(actions.indices, id: \.self) { i in
                         Button(action: actions[i].action) {
                             VStack(spacing: 12) {
-                                Image(systemName: actions[i].icon)
-                                    .font(.system(size: 24))
-                                Text(actions[i].title)
-                                    .font(.system(size: 14, weight: .medium))
-                                    .lineLimit(1)
-                                    .minimumScaleFactor(0.9)
+                                Image(systemName: actions[i].icon).font(.system(size: 24))
+                                Text(actions[i].title).font(.system(size: 14, weight: .medium)).lineLimit(1).minimumScaleFactor(0.9)
                             }
-                            .foregroundColor(.primary)
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 90)
-                            .background(.ultraThinMaterial)
-                            .cornerRadius(16)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 16)
-                                    .stroke(Color.white.opacity(0.2), lineWidth: 1)
-                            )
+                            .foregroundColor(.primary).frame(maxWidth: .infinity).frame(height: 90)
+                            .background(.ultraThinMaterial).cornerRadius(16)
+                            .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.white.opacity(0.2), lineWidth: 1))
                             .shadow(color: Color.black.opacity(0.05), radius: 10, x: 0, y: 5)
                         }
                     }
-                }
-                .padding(.horizontal, 24)
-                .padding(.top, 10)
+                }.padding(.horizontal, 24).padding(.top, 10)
             }
-            
             Spacer()
         }
     }
 }
 
-// MARK: - Expandable Description View
+// MARK: - Expandable Description
 
 struct ExpandableDescriptionView: View {
     let text: String
@@ -181,77 +127,67 @@ struct ExpandableDescriptionView: View {
     
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(title)
-                .font(.headline)
-            
-            Text(text)
-                .font(.system(size: 15))
-                .foregroundColor(.secondary)
-                .lineLimit(isExpanded ? nil : 4)
-                .animation(.spring(), value: isExpanded)
-            
+            Text(title).font(.headline)
+            Text(text).font(.system(size: 15)).foregroundColor(.secondary)
+                .lineLimit(isExpanded ? nil : 4).animation(.spring(), value: isExpanded)
             Button(action: { withAnimation { isExpanded.toggle() } }) {
                 Text(isExpanded ? "Show Less" : "Show More")
-                    .font(.caption.weight(.bold))
-                    .foregroundColor(color)
-                    .padding(.top, 4)
-                    .frame(height: 44, alignment: .top) // HIT TARGET FIX
-                    .contentShape(Rectangle())
+                    .font(.caption.weight(.bold)).foregroundColor(color)
+                    .padding(.top, 4).frame(height: 44, alignment: .top).contentShape(Rectangle())
             }
         }
-        .padding()
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.ultraThinMaterial)
-        .cornerRadius(16)
+        .padding().frame(maxWidth: .infinity, alignment: .leading)
+        .background(.ultraThinMaterial).cornerRadius(16)
         .onTapGesture { withAnimation { isExpanded.toggle() } }
     }
 }
 
-// MARK: - Media Artwork View (Universal)
+// MARK: - Media Artwork View
 
 struct MediaArtworkView: View {
     let url: URL?
     var data: Data? = nil
+    var image: UIImage? = nil // Added for compatibility
     let size: CGFloat
     var cornerRadius: CGFloat = 20
     var fallbackIcon: String = "music.note"
     var fallbackColor: Color = .royalPurple
     
+    @State private var cachedImage: UIImage? = nil
+    @State private var isLoading = true
+    
     var body: some View {
         ZStack {
-            if let data = data, let uiImage = UIImage(data: data) {
-                Image(uiImage: uiImage)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-            } else if let url = url {
-                AsyncImage(url: url) { phase in
-                    if let image = phase.image {
-                        image.resizable().aspectRatio(contentMode: .fill)
-                    } else if phase.error != nil {
-                        fallbackView
-                    } else {
-                        ZStack {
-                            fallbackColor.opacity(0.1)
-                            ProgressView()
-                        }
-                    }
+            if let image = image {
+                Image(uiImage: image).resizable().aspectRatio(contentMode: .fill)
+            } else if let data = data, let uiImage = UIImage(data: data) {
+                Image(uiImage: uiImage).resizable().aspectRatio(contentMode: .fill)
+            } else if let cachedImage = cachedImage {
+                Image(uiImage: cachedImage).resizable().aspectRatio(contentMode: .fill)
+            } else if url != nil && isLoading {
+                ZStack {
+                    fallbackColor.opacity(0.1)
+                    ProgressView().scaleEffect(0.8)
                 }
             } else {
-                fallbackView
+                ZStack {
+                    fallbackColor.opacity(0.1)
+                    Image(systemName: fallbackIcon).font(.system(size: size * 0.4)).foregroundColor(fallbackColor)
+                }
             }
         }
-        .frame(width: size, height: size)
-        .cornerRadius(cornerRadius)
-        .clipped()
-        .shadow(radius: 5)
+        .frame(width: size, height: size).cornerRadius(cornerRadius).clipped().shadow(radius: 5)
+        .onAppear { if image == nil { loadCachedImage() } }
+        .onChange(of: url) { _ in cachedImage = nil; isLoading = true; loadCachedImage() }
     }
     
-    private var fallbackView: some View {
-        ZStack {
-            fallbackColor.opacity(0.1)
-            Image(systemName: fallbackIcon)
-                .font(.system(size: size * 0.4))
-                .foregroundColor(fallbackColor)
+    private func loadCachedImage() {
+        guard let url = url else { isLoading = false; return }
+        ImageCache.shared.image(for: url) { loadedImage in
+            withAnimation(.easeIn(duration: 0.15)) {
+                self.cachedImage = loadedImage
+                self.isLoading = false
+            }
         }
     }
 }
@@ -272,45 +208,26 @@ struct MediaDetailHeader: View {
     var body: some View {
         HStack(alignment: .top, spacing: 16) {
             MediaArtworkView(
-                url: artworkURL,
-                data: artworkData,
-                size: 100,
-                cornerRadius: 20,
-                fallbackIcon: artworkIcon,
-                fallbackColor: artworkColor
+                url: artworkURL, data: artworkData, size: 100,
+                cornerRadius: 20, fallbackIcon: artworkIcon, fallbackColor: artworkColor
             )
-            
             VStack(alignment: .leading, spacing: 8) {
-                Text(title)
-                    .font(.title3.weight(.bold))
-                    .fixedSize(horizontal: false, vertical: true)
-                
-                Text(subtitle)
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-                
+                Text(title).font(.title3.weight(.bold)).fixedSize(horizontal: false, vertical: true)
+                Text(subtitle).font(.subheadline).foregroundColor(.secondary)
                 if let tertiary = tertiaryText {
-                    Text(tertiary)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                    Text(tertiary).font(.caption).foregroundColor(.secondary)
                 }
             }
-            
             Spacer()
-            
             if let onFavorite = onFavoriteToggle, let isFav = isFavorite {
                 Button(action: onFavorite) {
                     Image(systemName: isFav ? "star.fill" : "star")
-                        .font(.system(size: 24))
-                        .foregroundColor(.orange)
-                        .frame(width: 44, height: 44) // HIT TARGET FIX
-                        .contentShape(Rectangle())
+                        .font(.system(size: 24)).foregroundColor(.orange)
+                        .frame(width: 44, height: 44).contentShape(Rectangle())
                 }
             }
         }
-        .padding()
-        .background(.ultraThinMaterial)
-        .cornerRadius(24)
+        .padding().background(.ultraThinMaterial).cornerRadius(24)
     }
 }
 
@@ -329,32 +246,25 @@ struct GlassActionButton: View {
         Button(action: action) {
             HStack {
                 if isLoading {
-                    ProgressView()
-                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                    ProgressView().progressViewStyle(CircularProgressViewStyle(tint: .white))
                     Text(loadingText)
                 } else {
-                    if let icon = icon {
-                        Image(systemName: icon)
-                    }
+                    if let icon = icon { Image(systemName: icon) }
                     Text(title)
                 }
             }
             .font(.system(size: 16, weight: .semibold))
             .foregroundColor(isLoading || isDisabled ? .white.opacity(0.7) : .white)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 16)
+            .frame(maxWidth: .infinity).padding(.vertical, 16)
             .background(isLoading || isDisabled ? Color.secondary.opacity(0.3) : color)
             .cornerRadius(16)
             .shadow(color: (isLoading || isDisabled) ? Color.clear : color.opacity(0.3), radius: 10, x: 0, y: 5)
         }
-        .disabled(isLoading || isDisabled)
-        .opacity(isLoading || isDisabled ? 0.7 : 1.0)
+        .disabled(isLoading || isDisabled).opacity(isLoading || isDisabled ? 0.7 : 1.0)
     }
 }
 
-// MARK: - Glass Media List Row (Unified for Search Results)
-// Used for: Podcast Search Results, Favorites List, LibriVox Search
-// Interaction: Split (Row navigates, Right Icon acts)
+// MARK: - Glass Media List Row
 
 struct GlassMediaListRow: View {
     let title: String
@@ -370,134 +280,76 @@ struct GlassMediaListRow: View {
     var body: some View {
         HStack(spacing: 12) {
             MediaArtworkView(
-                url: artworkURL,
-                size: 56,
-                cornerRadius: 12,
-                fallbackIcon: artworkIcon,
-                fallbackColor: artworkColor
+                url: artworkURL, size: 56, cornerRadius: 12,
+                fallbackIcon: artworkIcon, fallbackColor: artworkColor
             )
-            
             VStack(alignment: .leading, spacing: 4) {
-                Text(title)
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundColor(.primary)
-                    .lineLimit(1)
-                
-                Text(subtitle)
-                    .font(.system(size: 14))
-                    .foregroundColor(.secondary)
-                    .lineLimit(1)
-                
+                Text(title).font(.system(size: 16, weight: .semibold)).foregroundColor(.primary).lineLimit(1)
+                Text(subtitle).font(.system(size: 14)).foregroundColor(.secondary).lineLimit(1)
                 if let details = details {
-                    Text(details)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                    Text(details).font(.caption).foregroundColor(.secondary)
                 }
             }
-            
             Spacer()
-            
             if let onFavorite = onFavoriteToggle, let isFav = isFavorite {
                 Button(action: onFavorite) {
                     Image(systemName: isFav ? "star.fill" : "star")
-                        .foregroundColor(.orange)
-                        .font(.system(size: 20))
-                        .frame(width: 44, height: 44) // HIT TARGET FIX: Big hit box for star
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(BorderlessButtonStyle())
+                        .foregroundColor(.orange).font(.system(size: 20))
+                        .frame(width: 44, height: 44).contentShape(Rectangle())
+                }.buttonStyle(BorderlessButtonStyle())
             } else if let rightIcon = rightIcon {
                 Image(systemName: rightIcon)
-                    .foregroundColor(.secondary.opacity(0.5))
-                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(.secondary.opacity(0.5)).font(.system(size: 14, weight: .semibold))
             }
         }
-        .padding(12)
-        .glassCard(cornerRadius: 16)
+        .padding(12).glassCard(cornerRadius: 16)
     }
 }
 
-// MARK: - Glass Download Row (Unified for Chapters/Episodes)
-// Used for: Podcast Episode List, Book Detail Chapter List
-// Interaction: Single (Whole row triggers action)
+// MARK: - Glass Download Row
 
 struct GlassDownloadRow: View {
     var index: Int? = nil
     let title: String
     let subtitle: String
-    
-    // State
     var isDownloaded: Bool
     var isDownloading: Bool
     var color: Color = .royalPurple
-    
-    // Actions
     var onDownload: () -> Void
     var onPlay: (() -> Void)? = nil
     
     var body: some View {
         Button(action: {
-            if isDownloading { return } // Do nothing if busy
-            if isDownloaded {
-                onPlay?()
-            } else {
-                onDownload()
-            }
+            if isDownloading { return }
+            if isDownloaded { onPlay?() } else { onDownload() }
         }) {
             HStack(spacing: 12) {
                 if let index = index {
-                    Text("\(index)")
-                        .font(.system(size: 14, weight: .bold))
-                        .foregroundColor(.secondary)
-                        .frame(width: 30)
+                    Text("\(index)").font(.system(size: 14, weight: .bold)).foregroundColor(.secondary).frame(width: 30)
                 }
-                
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(title)
-                        .font(.system(size: 15, weight: .medium))
-                        .foregroundColor(.primary)
-                        .lineLimit(1)
-                        .multilineTextAlignment(.leading)
-                    
-                    Text(subtitle)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                    Text(title).font(.system(size: 15, weight: .medium)).foregroundColor(.primary).lineLimit(1).multilineTextAlignment(.leading)
+                    Text(subtitle).font(.caption).foregroundColor(.secondary)
                 }
-                
                 Spacer()
-                
-                // Visual Indicator (Not a button anymore)
                 if isDownloaded {
                     if onPlay != nil {
-                        // Just the visual of the play button
                         ZStack {
-                            Circle()
-                                .fill(Color(white: 0.3))
-                                .frame(width: 28, height: 28)
-                            Image(systemName: "play.fill")
-                                .font(.system(size: 12))
-                                .foregroundColor(.white)
-                                .offset(x: 1)
+                            Circle().fill(Color(white: 0.3)).frame(width: 28, height: 28)
+                            Image(systemName: "play.fill").font(.system(size: 12)).foregroundColor(.white).offset(x: 1)
                         }
                     } else {
-                        Image(systemName: "checkmark.circle.fill")
-                            .foregroundColor(.green)
-                            .font(.system(size: 20))
+                        Image(systemName: "checkmark.circle.fill").foregroundColor(.green).font(.system(size: 20))
                     }
                 } else if isDownloading {
-                    ProgressView()
-                        .scaleEffect(0.8)
-                        .frame(width: 28, height: 28)
+                    ProgressView().scaleEffect(0.8).frame(width: 28, height: 28)
                 } else {
-                    Image(systemName: "arrow.down.circle")
-                        .foregroundColor(color)
-                        .font(.system(size: 24))
+                    Image(systemName: "arrow.down.circle").foregroundColor(color).font(.system(size: 24))
                 }
             }
-            .padding(12)
-            .glassCard(cornerRadius: 12)
+            .padding(12).glassCard(cornerRadius: 12)
         }
-        .buttonStyle(PlainButtonStyle()) // Ensures no flashing blue background on tap
+        .buttonStyle(PlainButtonStyle())
     }
 }
 
@@ -511,27 +363,16 @@ struct GlassSectionHeader: View {
     
     var body: some View {
         HStack(alignment: .firstTextBaseline) {
-            Text(title)
-                .font(.title2.weight(.bold))
-            
+            Text(title).font(.title2.weight(.bold))
             if let count = count, count > 0 {
-                Text("\(count)")
-                    .font(.headline)
-                    .foregroundColor(.secondary.opacity(0.7))
+                Text("\(count)").font(.headline).foregroundColor(.secondary.opacity(0.7))
             }
-            
             Spacer()
-            
             if let icon = actionIcon, let action = onAction {
                 Button(action: action) {
-                    Image(systemName: icon)
-                        .font(.system(size: 14, weight: .bold))
-                        .foregroundColor(.secondary)
-                        .padding(8)
-                        .background(.ultraThinMaterial)
-                        .clipShape(Circle())
-                        .frame(width: 44, height: 44) // HIT TARGET FIX
-                        .contentShape(Rectangle())
+                    Image(systemName: icon).font(.system(size: 14, weight: .bold)).foregroundColor(.secondary)
+                        .padding(8).background(.ultraThinMaterial).clipShape(Circle())
+                        .frame(width: 44, height: 44).contentShape(Rectangle())
                 }
             }
         }
@@ -553,13 +394,11 @@ struct GlassSegmentedFilter<T: Hashable>: View {
             }
         }
         .pickerStyle(SegmentedPickerStyle())
-        .onChange(of: selection) { newValue in
-            onChange?(newValue)
-        }
+        .onChange(of: selection) { newValue in onChange?(newValue) }
     }
 }
 
-// MARK: - Horizontal Favorites Carousel
+// MARK: - Favorites Carousel & Item
 
 struct FavoritesCarousel<Item: Identifiable, Content: View>: View {
     let title: String
@@ -570,38 +409,24 @@ struct FavoritesCarousel<Item: Identifiable, Content: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
-                Text(title)
-                    .font(.title2.weight(.bold))
+                Text(title).font(.title2.weight(.bold))
                 Spacer()
                 if let seeAll = onSeeAll {
                     Button(action: seeAll) {
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 14, weight: .bold))
-                            .foregroundColor(.secondary)
-                            .padding(8)
-                            .background(.ultraThinMaterial)
-                            .clipShape(Circle())
-                            .frame(width: 44, height: 44) // HIT TARGET FIX
-                            .contentShape(Rectangle())
+                        Image(systemName: "chevron.right").font(.system(size: 14, weight: .bold)).foregroundColor(.secondary)
+                            .padding(8).background(.ultraThinMaterial).clipShape(Circle())
+                            .frame(width: 44, height: 44).contentShape(Rectangle())
                     }
                 }
-            }
-            .padding(.horizontal, 4)
-            
+            }.padding(.horizontal, 4)
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(alignment: .top, spacing: 16) {
-                    ForEach(items) { item in
-                        content(item)
-                    }
-                }
-                .padding(.horizontal, 4)
-                .padding(.bottom, 10)
+                    ForEach(items) { item in content(item) }
+                }.padding(.horizontal, 4).padding(.bottom, 10)
             }
         }
     }
 }
-
-// MARK: - Carousel Item View
 
 struct CarouselItemView: View {
     let title: String
@@ -616,224 +441,93 @@ struct CarouselItemView: View {
         Button(action: onTap) {
             VStack(spacing: 8) {
                 MediaArtworkView(
-                    url: artworkURL,
-                    data: artworkData,
-                    size: size,
-                    cornerRadius: 16,
-                    fallbackIcon: fallbackIcon,
-                    fallbackColor: fallbackColor
-                )
-                .shadow(radius: 4)
-                
-                Text(title)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundColor(.primary)
-                    .lineLimit(2)
-                    .multilineTextAlignment(.center)
-                    .frame(width: size)
+                    url: artworkURL, data: artworkData, size: size,
+                    cornerRadius: 16, fallbackIcon: fallbackIcon, fallbackColor: fallbackColor
+                ).shadow(radius: 4)
+                Text(title).font(.system(size: 11, weight: .medium)).foregroundColor(.primary)
+                    .lineLimit(2).multilineTextAlignment(.center).frame(width: size)
             }
-        }
-        .buttonStyle(BorderlessButtonStyle())
+        }.buttonStyle(BorderlessButtonStyle())
     }
 }
 
-// MARK: - Standard Background Gradient
+// MARK: - Backgrounds & Buttons
 
 struct GlassBackgroundView: View {
     var primaryColor: Color = .blue
     var secondaryColor: Color = .royalPurple
-    
     var body: some View {
         LinearGradient(
             colors: [primaryColor.opacity(0.1), secondaryColor.opacity(0.1)],
-            startPoint: .topLeading,
-            endPoint: .bottomTrailing
-        )
-        .ignoresSafeArea()
+            startPoint: .topLeading, endPoint: .bottomTrailing
+        ).ignoresSafeArea()
     }
 }
-
-// MARK: - Glass Navigation Close Button
 
 struct GlassCloseButton: View {
     let action: () -> Void
-    
     var body: some View {
         Button(action: action) {
-            Image(systemName: "xmark")
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundColor(.primary)
-                .frame(width: 44, height: 44) // HIT TARGET FIX
-                .contentShape(Rectangle())
+            Image(systemName: "xmark").font(.system(size: 16, weight: .semibold)).foregroundColor(.primary)
+                .frame(width: 44, height: 44).contentShape(Rectangle())
         }
     }
 }
 
-// MARK: - Chapter/Episode Row View (Local Library)
-
-struct GlassChapterRow: View {
-    let index: Int
-    let title: String
-    let duration: String
-    var isDownloaded: Bool = true
-    var isPlaying: Bool = false
-    var isDownloading: Bool = false
-    var color: Color = .royalPurple
-    var onPlay: (() -> Void)? = nil
-    var onDownload: (() -> Void)? = nil
-    
-    var body: some View {
-        HStack(spacing: 12) {
-            Text("\(index + 1)")
-                .font(.caption.weight(.bold))
-                .foregroundColor(.secondary)
-                .frame(width: 25)
-            
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(.system(size: 15, weight: .medium))
-                    .foregroundColor(.primary)
-                    .lineLimit(1)
-                
-                Text(duration)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-            
-            Spacer()
-            
-            if isDownloaded {
-                if let play = onPlay {
-                    Button(action: play) {
-                        if isPlaying {
-                            Image(systemName: "waveform")
-                                .foregroundColor(color)
-                                .font(.caption)
-                        } else {
-                            Image(systemName: "play.fill")
-                                .font(.caption)
-                                .foregroundColor(.secondary.opacity(0.5))
-                        }
-                    }
-                    .buttonStyle(BorderlessButtonStyle())
-                    .frame(width: 44, height: 44) // HIT TARGET FIX
-                    .contentShape(Rectangle())
-                }
-            } else {
-                if isDownloading {
-                    ProgressView()
-                        .scaleEffect(0.8)
-                } else if let download = onDownload {
-                    Button(action: download) {
-                        Image(systemName: "arrow.down.circle")
-                            .foregroundColor(color)
-                            .font(.system(size: 20))
-                    }
-                    .buttonStyle(BorderlessButtonStyle())
-                    .frame(width: 44, height: 44) // HIT TARGET FIX
-                    .contentShape(Rectangle())
-                }
-            }
-        }
-        .padding(12)
-        .background(.ultraThinMaterial)
-        .cornerRadius(12)
-        .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(Color.white.opacity(0.2), lineWidth: 1)
-        )
-    }
-}
-
-// MARK: - Plus Button (for adding to queue)
-
+// RESTORED: GlassPlusButton
 struct GlassPlusButton: View {
     let action: () -> Void
-    
     var body: some View {
         Button(action: action) {
-            Image(systemName: "plus")
-                .font(.system(size: 16, weight: .bold))
-                .foregroundColor(.secondary)
-                .padding(8)
-                .background(.ultraThinMaterial)
-                .clipShape(Circle())
-                .frame(width: 44, height: 44) // HIT TARGET FIX
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(BorderlessButtonStyle())
+            Image(systemName: "plus").font(.system(size: 16, weight: .bold)).foregroundColor(.secondary)
+                .padding(8).background(.ultraThinMaterial).clipShape(Circle())
+                .frame(width: 44, height: 44).contentShape(Rectangle())
+        }.buttonStyle(BorderlessButtonStyle())
     }
 }
 
-// MARK: - Play Button Circle
-
 struct GlassPlayButton: View {
+    var isPlaying: Bool = false
     var size: CGFloat = 28
     var color: Color = .royalPurple
     let action: () -> Void
-    
     var body: some View {
         Button(action: action) {
             ZStack {
-                // Grey Circle
-                Circle()
-                    .fill(Color(white: 0.3)) // Dark grey for contrast
-                    .frame(width: size, height: size)
-                
-                // White Triangle
-                Image(systemName: "play.fill")
-                    .font(.system(size: size * 0.4))
-                    .foregroundColor(.white)
-                    .offset(x: 1) // Optical alignment
+                Circle().fill(Color(white: 0.3)).frame(width: size, height: size)
+                Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+                    .font(.system(size: size * 0.4)).foregroundColor(.white).offset(x: isPlaying ? 0 : 1)
             }
-            .shadow(radius: 2)
-            .frame(width: 44, height: 44) // HIT TARGET FIX: Big invisible area
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(BorderlessButtonStyle())
+            .shadow(radius: 2).frame(width: 44, height: 44).contentShape(Rectangle())
+        }.buttonStyle(BorderlessButtonStyle())
     }
 }
-
-// MARK: - View Extension for Glass Panel
 
 extension View {
     func glassPanel(cornerRadius: CGFloat = 24) -> some View {
-        self
-            .background(.ultraThinMaterial)
+        self.background(.ultraThinMaterial)
             .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .stroke(.white.opacity(0.15), lineWidth: 1)
-            )
+            .overlay(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous).stroke(.white.opacity(0.15), lineWidth: 1))
             .shadow(color: .black.opacity(0.2), radius: 20, x: 0, y: 10)
     }
-    
     func glassCard(cornerRadius: CGFloat = 16) -> some View {
-        self
-            .background(.ultraThinMaterial)
-            .cornerRadius(cornerRadius)
-            .overlay(
-                RoundedRectangle(cornerRadius: cornerRadius)
-                    .stroke(Color.white.opacity(0.2), lineWidth: 1)
-            )
+        self.background(.ultraThinMaterial).cornerRadius(cornerRadius)
+            .overlay(RoundedRectangle(cornerRadius: cornerRadius).stroke(Color.white.opacity(0.2), lineWidth: 1))
             .shadow(color: Color.black.opacity(0.05), radius: 5, x: 0, y: 2)
+    }
+    func glassListRow() -> some View {
+        self.listRowBackground(Color.clear).listRowSeparator(.hidden).listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+    }
+    func glassListRowWide() -> some View {
+        self.listRowBackground(Color.clear).listRowSeparator(.hidden).listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
     }
 }
 
-// MARK: - Standard List Row Modifiers
+// MARK: - BorderlessButtonStyle (Restored)
 
-extension View {
-    func glassListRow() -> some View {
-        self
-            .listRowBackground(Color.clear)
-            .listRowSeparator(.hidden)
-            .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
-    }
-    
-    func glassListRowWide() -> some View {
-        self
-            .listRowBackground(Color.clear)
-            .listRowSeparator(.hidden)
-            .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+struct BorderlessButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .opacity(configuration.isPressed ? 0.7 : 1.0)
     }
 }

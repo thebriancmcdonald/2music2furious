@@ -1,12 +1,22 @@
 //
 //  PodcastSearchView.swift
-//  2 Music 2 Furious - MILESTONE 11
+//  2 Music 2 Furious - MILESTONE 12
 //
-//  Podcast search and download - Uses SharedComponents for consistency
+//  Podcast search and download - Refactored for unified navigation
+//  CHANGES: Removed nested sheets, uses NavigationStack with push navigation
+//  UPDATED: Now passes artwork correctly to AudioPlayer.playNow()
 //
 
 import SwiftUI
 import UniformTypeIdentifiers
+
+// MARK: - Navigation Destinations
+
+enum PodcastNavDestination: Hashable {
+    case search
+    case favorites
+    case podcastDetail(Podcast)
+}
 
 // Sort Enum
 enum DownloadSortOption: String, CaseIterable {
@@ -22,10 +32,11 @@ struct PodcastSearchView: View {
     @ObservedObject var speechPlayer: AudioPlayer
     let dismiss: () -> Void
     
+    // Navigation State (replaces sheet booleans)
+    @State private var navigationPath = NavigationPath()
+    
+    // File picker stays as system modal
     @State private var showingFilePicker = false
-    @State private var showingSearch = false
-    @State private var showingFavorites = false
-    @State private var showingPodcastEpisodes: Podcast?
     
     // Sort State
     @State private var sortOption: DownloadSortOption = .date
@@ -46,7 +57,7 @@ struct PodcastSearchView: View {
     }
     
     var body: some View {
-        NavigationView {
+        NavigationStack(path: $navigationPath) {
             ZStack {
                 GlassBackgroundView()
                 
@@ -56,7 +67,7 @@ struct PodcastSearchView: View {
                         FavoritesCarousel(
                             title: "Favorites",
                             items: searchManager.favoritePodcasts,
-                            onSeeAll: { showingFavorites = true }
+                            onSeeAll: { navigationPath.append(PodcastNavDestination.favorites) }
                         ) { podcast in
                             CarouselItemView(
                                 title: podcast.title,
@@ -66,7 +77,7 @@ struct PodcastSearchView: View {
                                 fallbackColor: .royalPurple
                             ) {
                                 searchManager.loadEpisodes(for: podcast)
-                                showingPodcastEpisodes = podcast
+                                navigationPath.append(PodcastNavDestination.podcastDetail(podcast))
                             }
                         }
                         .listRowInsets(EdgeInsets(top: 20, leading: 16, bottom: 10, trailing: 16))
@@ -112,7 +123,7 @@ struct PodcastSearchView: View {
                             subtitle: "Import files from your device or\nsearch for new podcasts.",
                             actions: [
                                 (icon: "square.and.arrow.up", title: "Upload Files", action: { showingFilePicker = true }),
-                                (icon: "magnifyingglass", title: "Search Podcasts", action: { showingSearch = true })
+                                (icon: "magnifyingglass", title: "Search Podcasts", action: { navigationPath.append(PodcastNavDestination.search) })
                             ]
                         )
                         .listRowInsets(EdgeInsets())
@@ -121,7 +132,6 @@ struct PodcastSearchView: View {
                         .frame(height: 400)
                     } else {
                         ForEach(sortedDownloads, id: \.self) { filename in
-                            // UPDATED: Using refactored row
                             GlassDownloadedRow(
                                 filename: filename,
                                 searchManager: searchManager,
@@ -166,7 +176,7 @@ struct PodcastSearchView: View {
                     }
                     .tint(.white)
                     
-                    Button(action: { showingSearch = true }) {
+                    Button(action: { navigationPath.append(PodcastNavDestination.search) }) {
                         Image(systemName: "magnifyingglass")
                     }
                     .tint(.white)
@@ -179,37 +189,43 @@ struct PodcastSearchView: View {
             ) { result in
                 handleFileUpload(result: result)
             }
-            .sheet(isPresented: $showingSearch) {
-                PodcastSearchModal(
-                    searchManager: searchManager,
-                    downloadManager: downloadManager,
-                    speechPlayer: speechPlayer,
-                    dismiss: { showingSearch = false },
-                    dismissAll: dismiss
-                )
-            }
-            .sheet(isPresented: $showingFavorites) {
-                FavoritesFullView(
-                    searchManager: searchManager,
-                    downloadManager: downloadManager,
-                    speechPlayer: speechPlayer,
-                    dismiss: { showingFavorites = false },
-                    dismissAll: dismiss
-                )
-            }
-            .sheet(item: $showingPodcastEpisodes) { podcast in
-                PodcastEpisodesSheet(
-                    podcast: podcast,
-                    searchManager: searchManager,
-                    downloadManager: downloadManager,
-                    speechPlayer: speechPlayer,
-                    dismiss: { showingPodcastEpisodes = nil },
-                    dismissAll: dismiss
-                )
+            // MARK: - Navigation Destinations (replaces sheets)
+            .navigationDestination(for: PodcastNavDestination.self) { destination in
+                switch destination {
+                case .search:
+                    PodcastSearchDestination(
+                        searchManager: searchManager,
+                        downloadManager: downloadManager,
+                        speechPlayer: speechPlayer,
+                        navigationPath: $navigationPath,
+                        dismissAll: dismiss
+                    )
+                case .favorites:
+                    FavoritesDestination(
+                        searchManager: searchManager,
+                        downloadManager: downloadManager,
+                        speechPlayer: speechPlayer,
+                        navigationPath: $navigationPath,
+                        dismissAll: dismiss
+                    )
+                case .podcastDetail(let podcast):
+                    PodcastDetailDestination(
+                        podcast: podcast,
+                        searchManager: searchManager,
+                        downloadManager: downloadManager,
+                        speechPlayer: speechPlayer,
+                        dismissAll: dismiss
+                    )
+                }
             }
         }
         .accentColor(.royalPurple)
+        .onAppear {
+            searchManager.loadIfNeeded()
+        }
     }
+    
+    // MARK: - Actions
     
     private func handleFileUpload(result: Result<[URL], Error>) {
         do {
@@ -241,13 +257,27 @@ struct PodcastSearchView: View {
     }
     
     private func playEpisode(filename: String) {
+        // 1. Clean filename
         let cleanTitle = filename
             .replacingOccurrences(of: ".mp3", with: "")
             .replacingOccurrences(of: ".m4a", with: "")
             .replacingOccurrences(of: "_", with: " ")
+        
+        let components = cleanTitle.components(separatedBy: " ")
+        let podcastName = components.first ?? "Unknown Podcast"
+        
+        // 2. Try to find matching artwork from favorites
+        var artworkUrl: URL? = nil
+        if let match = searchManager.favoritePodcasts.first(where: { $0.title.contains(podcastName) || podcastName.contains($0.title) }) {
+            artworkUrl = URL(string: match.artworkUrl)
+        }
+        
+        // 3. Play
         let track = Track(title: cleanTitle, artist: "Podcast", filename: filename)
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-        speechPlayer.playNow(track)
+        
+        // Pass artworkURL to playNow
+        speechPlayer.playNow(track, artworkURL: artworkUrl)
         dismiss()
     }
     
@@ -260,7 +290,7 @@ struct PodcastSearchView: View {
     }
 }
 
-// MARK: - Glass Downloaded Episode Row
+// MARK: - Glass Downloaded Episode Row (unchanged)
 
 struct GlassDownloadedRow: View {
     let filename: String
@@ -290,7 +320,6 @@ struct GlassDownloadedRow: View {
     }
     
     var body: some View {
-        // UPDATED: Whole row is now a button
         Button(action: onPlay) {
             HStack(spacing: 16) {
                 MediaArtworkView(
@@ -316,7 +345,6 @@ struct GlassDownloadedRow: View {
                 
                 Spacer()
                 
-                // Visual Play Indicator (Non-Interactive)
                 ZStack {
                     Circle()
                         .fill(Color(white: 0.3))
@@ -331,166 +359,144 @@ struct GlassDownloadedRow: View {
             .padding(12)
             .glassCard(cornerRadius: 16)
         }
-        .buttonStyle(PlainButtonStyle()) // Prevents flashing box style
+        .buttonStyle(PlainButtonStyle())
     }
 }
 
-// MARK: - Podcast Search Modal
+// MARK: - Search Destination (was PodcastSearchModal)
 
-struct PodcastSearchModal: View {
+struct PodcastSearchDestination: View {
     @ObservedObject var searchManager: PodcastSearchManager
     @ObservedObject var downloadManager: DownloadManager
     @ObservedObject var speechPlayer: AudioPlayer
-    let dismiss: () -> Void
+    @Binding var navigationPath: NavigationPath
     let dismissAll: () -> Void
     
     @State private var searchText = ""
-    @State var selectedPodcast: Podcast?
     
     var body: some View {
-        NavigationView {
-            ZStack {
-                GlassBackgroundView()
+        ZStack {
+            GlassBackgroundView()
+            
+            VStack(spacing: 0) {
+                // Search Bar
+                GlassSearchBar(
+                    text: $searchText,
+                    placeholder: "Search podcasts...",
+                    onCommit: { searchManager.searchPodcasts(query: searchText) }
+                )
+                .padding()
                 
-                VStack(spacing: 0) {
-                    if let podcast = selectedPodcast {
-                        EpisodesBrowseView(
-                            podcast: podcast,
-                            episodes: searchManager.episodes,
-                            isLoading: searchManager.isLoadingEpisodes,
-                            downloadManager: downloadManager,
-                            speechPlayer: speechPlayer,
-                            searchManager: searchManager,
-                            onBack: { selectedPodcast = nil },
-                            onDismiss: dismissAll
-                        )
-                    } else {
-                        // Search Bar
-                        GlassSearchBar(
-                            text: $searchText,
-                            placeholder: "Search podcasts...",
-                            onCommit: { searchManager.searchPodcasts(query: searchText) }
-                        )
-                        .padding()
-                        
-                        if searchManager.isSearching {
-                            Spacer(); ProgressView("Searching..."); Spacer()
-                        } else if searchManager.searchResults.isEmpty && !searchText.isEmpty {
-                            Spacer(); Text("No results found").foregroundColor(.gray); Spacer()
-                        } else {
-                            ScrollView {
-                                LazyVStack(spacing: 12) {
-                                    ForEach(searchManager.searchResults) { podcast in
-                                        // Using Shared Component
-                                        GlassMediaListRow(
-                                            title: podcast.title,
-                                            subtitle: podcast.author,
-                                            artworkURL: URL(string: podcast.artworkUrl),
-                                            artworkIcon: "mic.fill",
-                                            artworkColor: .royalPurple,
-                                            isFavorite: searchManager.isFavorite(podcast),
-                                            onFavoriteToggle: { searchManager.toggleFavorite(podcast) }
-                                        )
-                                        .onTapGesture {
-                                            selectedPodcast = podcast
-                                            searchManager.loadEpisodes(for: podcast)
-                                        }
-                                    }
+                if searchManager.isSearching {
+                    Spacer()
+                    ProgressView("Searching...")
+                    Spacer()
+                } else if searchManager.searchResults.isEmpty && !searchText.isEmpty {
+                    Spacer()
+                    Text("No results found").foregroundColor(.gray)
+                    Spacer()
+                } else {
+                    ScrollView {
+                        LazyVStack(spacing: 12) {
+                            ForEach(searchManager.searchResults) { podcast in
+                                GlassMediaListRow(
+                                    title: podcast.title,
+                                    subtitle: podcast.author,
+                                    artworkURL: URL(string: podcast.artworkUrl),
+                                    artworkIcon: "mic.fill",
+                                    artworkColor: .royalPurple,
+                                    isFavorite: searchManager.isFavorite(podcast),
+                                    onFavoriteToggle: { searchManager.toggleFavorite(podcast) }
+                                )
+                                .onTapGesture {
+                                    searchManager.loadEpisodes(for: podcast)
+                                    navigationPath.append(PodcastNavDestination.podcastDetail(podcast))
                                 }
-                                .padding(.horizontal)
                             }
                         }
+                        .padding(.horizontal)
                     }
                 }
             }
-            .navigationTitle("Search")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    GlassCloseButton(action: dismiss)
-                }
-            }
         }
+        .navigationTitle("Search")
+        .navigationBarTitleDisplayMode(.inline)
     }
 }
 
-// MARK: - Podcast Episodes Sheet
+// MARK: - Favorites Destination (was FavoritesFullView)
 
-struct PodcastEpisodesSheet: View {
-    let podcast: Podcast
+struct FavoritesDestination: View {
     @ObservedObject var searchManager: PodcastSearchManager
     @ObservedObject var downloadManager: DownloadManager
     @ObservedObject var speechPlayer: AudioPlayer
-    let dismiss: () -> Void
+    @Binding var navigationPath: NavigationPath
     let dismissAll: () -> Void
     
     var body: some View {
-        NavigationView {
-            ZStack {
-                GlassBackgroundView()
-                EpisodesBrowseView(
-                    podcast: podcast,
-                    episodes: searchManager.episodes,
-                    isLoading: searchManager.isLoadingEpisodes,
-                    downloadManager: downloadManager,
-                    speechPlayer: speechPlayer,
-                    searchManager: searchManager,
-                    onBack: nil,
-                    onDismiss: dismissAll
-                )
-            }
-            .navigationTitle("Episodes")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    GlassCloseButton(action: dismiss)
+        ZStack {
+            GlassBackgroundView()
+            
+            if searchManager.favoritePodcasts.isEmpty {
+                VStack {
+                    Spacer()
+                    Text("No favorites yet").foregroundColor(.gray)
+                    Spacer()
+                }
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 12) {
+                        ForEach(searchManager.favoritePodcasts) { podcast in
+                            GlassMediaListRow(
+                                title: podcast.title,
+                                subtitle: podcast.author,
+                                artworkURL: URL(string: podcast.artworkUrl),
+                                artworkIcon: "mic.fill",
+                                artworkColor: .royalPurple,
+                                isFavorite: searchManager.isFavorite(podcast),
+                                onFavoriteToggle: { searchManager.toggleFavorite(podcast) }
+                            )
+                            .onTapGesture {
+                                searchManager.loadEpisodes(for: podcast)
+                                navigationPath.append(PodcastNavDestination.podcastDetail(podcast))
+                            }
+                        }
+                    }
+                    .padding()
                 }
             }
         }
+        .navigationTitle("Favorites")
+        .navigationBarTitleDisplayMode(.inline)
     }
 }
 
-// MARK: - Episodes Browse View
+// MARK: - Podcast Detail Destination (was PodcastEpisodesSheet / EpisodesBrowseView)
 
-struct EpisodesBrowseView: View {
+struct PodcastDetailDestination: View {
     let podcast: Podcast
-    let episodes: [Episode]
-    let isLoading: Bool
+    @ObservedObject var searchManager: PodcastSearchManager
     @ObservedObject var downloadManager: DownloadManager
     @ObservedObject var speechPlayer: AudioPlayer
-    @ObservedObject var searchManager: PodcastSearchManager
-    let onBack: (() -> Void)?
-    let onDismiss: () -> Void
+    let dismissAll: () -> Void
     
     @State private var showDownloadedOnly = false
-    @State var showingToast = false
-    @State var toastMessage = ""
+    @State private var showingToast = false
+    @State private var toastMessage = ""
     
     var filteredEpisodes: [Episode] {
         showDownloadedOnly
-            ? episodes.filter { downloadManager.isDownloaded(filename: filenameForEpisode($0)) }
-            : episodes
+            ? searchManager.episodes.filter { downloadManager.isDownloaded(filename: filenameForEpisode($0)) }
+            : searchManager.episodes
     }
     
     var body: some View {
         ZStack {
+            GlassBackgroundView()
+            
             List {
                 Section {
                     VStack(spacing: 20) {
-                        // Back Button
-                        if let onBack = onBack {
-                            HStack {
-                                Button(action: onBack) {
-                                    HStack(spacing: 4) {
-                                        Image(systemName: "chevron.left")
-                                        Text("Back")
-                                    }
-                                }
-                                .foregroundColor(.royalPurple)
-                                Spacer()
-                            }
-                        }
-                        
                         // Header
                         MediaDetailHeader(
                             title: podcast.title,
@@ -516,7 +522,7 @@ struct EpisodesBrowseView: View {
                 .listRowInsets(EdgeInsets(top: 10, leading: 16, bottom: 0, trailing: 16))
                 
                 // Loading State
-                if isLoading {
+                if searchManager.isLoadingEpisodes {
                     Section {
                         HStack { Spacer(); ProgressView("Loading episodes..."); Spacer() }
                             .listRowBackground(Color.clear)
@@ -530,7 +536,6 @@ struct EpisodesBrowseView: View {
                     // Episode Rows
                     Section {
                         ForEach(filteredEpisodes) { episode in
-                            // Using Shared Component
                             GlassDownloadRow(
                                 title: episode.title,
                                 subtitle: formatDuration(episode.duration),
@@ -567,7 +572,11 @@ struct EpisodesBrowseView: View {
                 .zIndex(100)
             }
         }
+        .navigationTitle("Episodes")
+        .navigationBarTitleDisplayMode(.inline)
     }
+    
+    // MARK: - Helpers
     
     private func filenameForEpisode(_ episode: Episode) -> String {
         "\(podcast.title)_\(episode.title).mp3"
@@ -584,9 +593,16 @@ struct EpisodesBrowseView: View {
             artist: podcast.title,
             filename: filename
         )
+        
+        // UPDATED: Pass artwork directly to playNow
+        var artworkUrl: URL? = nil
+        if let url = URL(string: podcast.artworkUrl) {
+            artworkUrl = url
+        }
+        
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-        speechPlayer.playNow(track)
-        onDismiss()
+        speechPlayer.playNow(track, artworkURL: artworkUrl)
+        dismissAll()
     }
     
     private func downloadEpisode(_ episode: Episode) {
@@ -606,78 +622,10 @@ struct EpisodesBrowseView: View {
         }
     }
     
-    // Duration Helper
     private func formatDuration(_ duration: TimeInterval) -> String {
         let formatter = DateComponentsFormatter()
         formatter.allowedUnits = duration >= 3600 ? [.hour, .minute, .second] : [.minute, .second]
         formatter.zeroFormattingBehavior = .pad
         return formatter.string(from: duration) ?? "00:00"
-    }
-}
-
-// MARK: - Favorites Full View
-
-struct FavoritesFullView: View {
-    @ObservedObject var searchManager: PodcastSearchManager
-    @ObservedObject var downloadManager: DownloadManager
-    @ObservedObject var speechPlayer: AudioPlayer
-    let dismiss: () -> Void
-    let dismissAll: () -> Void
-    
-    @State private var selectedPodcast: Podcast?
-    
-    var body: some View {
-        NavigationView {
-            ZStack {
-                GlassBackgroundView()
-                VStack {
-                    if let podcast = selectedPodcast {
-                        EpisodesBrowseView(
-                            podcast: podcast,
-                            episodes: searchManager.episodes,
-                            isLoading: searchManager.isLoadingEpisodes,
-                            downloadManager: downloadManager,
-                            speechPlayer: speechPlayer,
-                            searchManager: searchManager,
-                            onBack: { selectedPodcast = nil },
-                            onDismiss: dismissAll
-                        )
-                    } else if searchManager.favoritePodcasts.isEmpty {
-                        Spacer()
-                        Text("No favorites yet").foregroundColor(.gray)
-                        Spacer()
-                    } else {
-                        ScrollView {
-                            LazyVStack(spacing: 12) {
-                                ForEach(searchManager.favoritePodcasts) { podcast in
-                                    // Using Shared Component
-                                    GlassMediaListRow(
-                                        title: podcast.title,
-                                        subtitle: podcast.author,
-                                        artworkURL: URL(string: podcast.artworkUrl),
-                                        artworkIcon: "mic.fill",
-                                        artworkColor: .royalPurple,
-                                        isFavorite: searchManager.isFavorite(podcast),
-                                        onFavoriteToggle: { searchManager.toggleFavorite(podcast) }
-                                    )
-                                    .onTapGesture {
-                                        selectedPodcast = podcast
-                                        searchManager.loadEpisodes(for: podcast)
-                                    }
-                                }
-                            }
-                            .padding()
-                        }
-                    }
-                }
-            }
-            .navigationTitle("Favorites")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    GlassCloseButton(action: dismiss)
-                }
-            }
-        }
     }
 }

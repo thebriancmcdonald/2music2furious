@@ -3,8 +3,7 @@
 //  2 Music 2 Furious
 //
 //  Text-to-Speech manager using AVSpeechSynthesizer
-//  Provides word-by-word callbacks for highlighting
-//  Chunks long text to ensure reliable word callbacks
+//  Features: Robust utterance tracking to fix highlighting bugs
 //
 
 import Foundation
@@ -44,8 +43,7 @@ class TTSManager: NSObject, ObservableObject {
     private var currentChunkIndex: Int = 0
     private var chunkStartPosition: Int = 0  // Global position where current chunk starts
     private var shouldContinueChunks = false  // Flag to prevent auto-advance after stop
-    private var utteranceGeneration: Int = 0  // Track which utterance is current to ignore stale callbacks
-
+    
     // Callbacks
     var onWordSpoken: ((NSRange) -> Void)?
     var onFinished: (() -> Void)?
@@ -54,7 +52,8 @@ class TTSManager: NSObject, ObservableObject {
     // MARK: - Private Properties
 
     private let synthesizer = AVSpeechSynthesizer()
-    private var utterance: AVSpeechUtterance?
+    // Keep a reference to the currently active utterance to validate callbacks
+    private var currentUtterance: AVSpeechUtterance?
 
     // Maximum characters per chunk (keep small for reliable callbacks)
     private let maxChunkSize = 1000
@@ -140,7 +139,7 @@ class TTSManager: NSObject, ObservableObject {
     /// Stop speaking completely
     func stop() {
         shouldContinueChunks = false  // Prevent auto-advance to next chunk
-        utteranceGeneration += 1  // Invalidate any pending callbacks from old utterances
+        currentUtterance = nil // Invalidate current utterance immediately
         synthesizer.stopSpeaking(at: .immediate)
         isPlaying = false
         isPaused = false
@@ -174,19 +173,14 @@ class TTSManager: NSObject, ObservableObject {
     /// Seek to position and always start playing (for tap-to-seek)
     func seekAndPlay(to characterPosition: Int) {
         let nsLength = (currentText as NSString).length
-        let targetPosition = max(0, min(characterPosition, nsLength))
-
-        // Stop any current speech and clean up
-        shouldContinueChunks = false
-        utteranceGeneration += 1
-        synthesizer.stopSpeaking(at: .immediate)
-        isPlaying = false
-        isPaused = false
-
-        // Start immediately from new position
-        currentCharacterPosition = targetPosition
+        stop()
+        currentCharacterPosition = max(0, min(characterPosition, nsLength))
         updateProgress()
+
+        // Rebuild chunks from new position
         buildChunks(from: currentCharacterPosition)
+
+        // Always start playing
         speak(from: currentCharacterPosition)
     }
 
@@ -318,8 +312,7 @@ class TTSManager: NSObject, ObservableObject {
         // Set initial highlight to start of chunk (will be updated by callback)
         currentWordRange = NSRange(location: chunk.startPosition, length: 1)
         shouldContinueChunks = true  // Allow auto-advance to next chunk
-        utteranceGeneration += 1  // New generation for this utterance
-
+        
         // Create utterance for this chunk
         let newUtterance = AVSpeechUtterance(string: chunk.text)
 
@@ -336,7 +329,9 @@ class TTSManager: NSObject, ObservableObject {
         newUtterance.pitchMultiplier = 1.0
         newUtterance.volume = 1.0
 
-        utterance = newUtterance
+        // Set as current utterance to validate callbacks
+        currentUtterance = newUtterance
+        
         isPlaying = true
         isPaused = false
 
@@ -346,7 +341,6 @@ class TTSManager: NSObject, ObservableObject {
     private func mapSpeedToRate(_ speed: Float) -> Float {
         // AVSpeechUtterance rate: 0.0 (slowest) to 1.0 (fastest), 0.5 is default
         // Our speed: 1.0 (normal) to 2.0 (fast)
-        // Map 1.0 -> 0.5, 2.0 -> 0.65 (not too fast to be unintelligible)
         let minRate: Float = 0.5
         let maxRate: Float = 0.65
         let normalizedSpeed = (speed - 1.0) / 1.0  // 0.0 to 1.0
@@ -407,16 +401,16 @@ class TTSManager: NSObject, ObservableObject {
 extension TTSManager: AVSpeechSynthesizerDelegate {
 
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didStart utterance: AVSpeechUtterance) {
-        let generationAtStart = self.utteranceGeneration
         DispatchQueue.main.async {
-            guard generationAtStart == self.utteranceGeneration else { return }
+            // Verify this is the utterance we expect to be playing
+            guard self.currentUtterance === utterance else { return }
+            
             self.isPlaying = true
             self.isPaused = false
         }
     }
 
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didPause utterance: AVSpeechUtterance) {
-        // Don't check generation - pause is always intentional and current
         DispatchQueue.main.async {
             self.isPlaying = false
             self.isPaused = true
@@ -424,7 +418,6 @@ extension TTSManager: AVSpeechSynthesizerDelegate {
     }
 
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didContinue utterance: AVSpeechUtterance) {
-        // Don't check generation - continue is always intentional and current
         DispatchQueue.main.async {
             self.isPlaying = true
             self.isPaused = false
@@ -432,14 +425,9 @@ extension TTSManager: AVSpeechSynthesizerDelegate {
     }
 
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
-        // Capture generation to check if this callback is still relevant
-        let generationAtFinish = self.utteranceGeneration
-
         DispatchQueue.main.async {
-            // Ignore if generation changed (we've started a new utterance)
-            guard generationAtFinish == self.utteranceGeneration else {
-                return
-            }
+            // Ignore if this is an old utterance
+            guard self.currentUtterance === utterance else { return }
 
             // Only continue if not stopped/paused
             guard self.shouldContinueChunks else {
@@ -463,23 +451,26 @@ extension TTSManager: AVSpeechSynthesizerDelegate {
     }
 
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
-        // Don't modify state here - the caller (stop/seekAndPlay) handles state synchronously
-        // This prevents async callback from overriding state set by new utterances
+        // Handled by stop()
     }
 
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer,
                            willSpeakRangeOfSpeechString characterRange: NSRange,
                            utterance: AVSpeechUtterance) {
-        // Capture generation and chunk position to check if this callback is still relevant
-        let generationAtCallback = self.utteranceGeneration
-        let chunkStart = self.chunkStartPosition
-
+        
+        // IMPORTANT: Move ALL logic inside the main queue block.
+        // Reading `chunkStartPosition` or checking identity from a background thread
+        // causes race conditions with seek/stop operations on the main thread.
+        
         DispatchQueue.main.async {
-            // Ignore if generation changed (we've started a new utterance)
-            guard generationAtCallback == self.utteranceGeneration else {
-                return
-            }
+            // 1. Verify this is the current utterance.
+            // If seek() was called, currentUtterance has changed and this callback is stale.
+            guard self.currentUtterance === utterance else { return }
 
+            // 2. Now it is safe to read `chunkStartPosition` because we are on the main thread
+            // and we know the utterance matches the current state.
+            let chunkStart = self.chunkStartPosition
+            
             // Adjust range to account for chunk's position in full text
             let adjustedRange = NSRange(
                 location: chunkStart + characterRange.location,

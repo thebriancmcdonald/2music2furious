@@ -1,22 +1,29 @@
 //
 //  RadioSearchView.swift
-//  2 Music 2 Furious - MILESTONE 11
+//  2 Music 2 Furious - MILESTONE 12
 //
 //  Radio search with filters - Uses SharedComponents for consistency
+//  UPDATED: Passes Station Artwork to AudioPlayer for Background Blur
 //
 
 import SwiftUI
+
+// MARK: - Navigation Destination Enum
+
+enum RadioNavDestination: Hashable {
+    case favorites
+}
 
 struct RadioSearchView: View {
     @ObservedObject var radioAPI: RadioBrowserAPI
     @ObservedObject var musicPlayer: AudioPlayer
     let dismiss: () -> Void
     
+    @State private var navigationPath = NavigationPath()
     @State private var searchText = ""
     @State private var selectedGenre: String? = nil
     @State private var selectedCountry: String? = nil
     @State private var selectedBitrate: Int? = nil
-    @State private var showingFavoritesFull = false
     
     // Preset Filters
     let genres = ["Pop", "Rock", "Jazz", "Classical", "Hip Hop", "Electronic", "News", "Talk", "Country", "Indie"]
@@ -30,7 +37,7 @@ struct RadioSearchView: View {
     ]
     
     var body: some View {
-        NavigationView {
+        NavigationStack(path: $navigationPath) {
             ZStack {
                 GlassBackgroundView()
                 
@@ -40,14 +47,14 @@ struct RadioSearchView: View {
                         FavoritesCarousel(
                             title: "Favorites",
                             items: Array(radioAPI.favoriteStations.prefix(8)),
-                            onSeeAll: { showingFavoritesFull = true }
+                            onSeeAll: { navigationPath.append(RadioNavDestination.favorites) }
                         ) { station in
                             CarouselItemView(
                                 title: station.displayName,
                                 artworkURL: URL(string: station.favicon),
                                 size: 70,
                                 fallbackIcon: "antenna.radiowaves.left.and.right",
-                                fallbackColor: .orange // Radio keeps Orange identity to distinguish from Podcasts
+                                fallbackColor: .orange
                             ) {
                                 playStation(station)
                             }
@@ -201,16 +208,6 @@ struct RadioSearchView: View {
                 }
                 .listStyle(.plain)
                 .scrollContentBackground(.hidden)
-                
-                if showingFavoritesFull {
-                    RadioFavoritesFullView(
-                        radioAPI: radioAPI,
-                        musicPlayer: musicPlayer,
-                        dismiss: { showingFavoritesFull = false }
-                    )
-                    .transition(.move(edge: .trailing))
-                    .zIndex(100)
-                }
             }
             .navigationTitle("Radio")
             .navigationBarTitleDisplayMode(.inline)
@@ -219,8 +216,18 @@ struct RadioSearchView: View {
                     GlassCloseButton(action: dismiss)
                 }
             }
+            .navigationDestination(for: RadioNavDestination.self) { destination in
+                switch destination {
+                case .favorites:
+                    RadioFavoritesDestination(
+                        radioAPI: radioAPI,
+                        musicPlayer: musicPlayer,
+                        dismiss: dismiss
+                    )
+                }
+            }
         }
-        .accentColor(.royalPurple) // Global purple tint
+        .accentColor(.royalPurple)
     }
     
     // MARK: - Actions
@@ -247,7 +254,8 @@ struct RadioSearchView: View {
     }
     
     private func playStation(_ station: RadioStation) {
-        musicPlayer.addRadioStream(name: station.displayName, streamURL: station.url)
+        // UPDATED: Now passes favicon for artwork background
+        musicPlayer.addRadioStream(name: station.displayName, streamURL: station.url, artworkURL: station.favicon)
         dismiss()
     }
 }
@@ -284,7 +292,7 @@ struct FilterPill: View {
     @ViewBuilder
     var backgroundView: some View {
         if isActive {
-            Color.royalPurple // UPDATED: Changed from Blue to Royal Purple
+            Color.royalPurple
         } else {
             Rectangle().fill(.ultraThinMaterial)
         }
@@ -358,24 +366,33 @@ struct GlassStationRow: View {
     }
 }
 
-// MARK: - Full Favorites View
+// MARK: - Radio Favorites Destination (Push Navigation)
 
-struct RadioFavoritesFullView: View {
+struct RadioFavoritesDestination: View {
     @ObservedObject var radioAPI: RadioBrowserAPI
     @ObservedObject var musicPlayer: AudioPlayer
     let dismiss: () -> Void
     
     var body: some View {
-        NavigationView {
-            ZStack {
-                GlassBackgroundView()
-                
+        ZStack {
+            GlassBackgroundView()
+            
+            if radioAPI.favoriteStations.isEmpty {
+                VStack(spacing: 16) {
+                    Image(systemName: "star")
+                        .font(.system(size: 50))
+                        .foregroundColor(.secondary)
+                    Text("No favorites yet")
+                        .foregroundColor(.secondary)
+                }
+            } else {
                 ScrollView {
                     LazyVStack(spacing: 12) {
                         ForEach(radioAPI.favoriteStations) { station in
                             GlassStationRow(station: station, radioAPI: radioAPI)
                                 .onTapGesture {
-                                    musicPlayer.addRadioStream(name: station.displayName, streamURL: station.url)
+                                    // UPDATED: Now passes favicon for artwork background
+                                    musicPlayer.addRadioStream(name: station.displayName, streamURL: station.url, artworkURL: station.favicon)
                                     dismiss()
                                 }
                         }
@@ -383,13 +400,8 @@ struct RadioFavoritesFullView: View {
                     .padding()
                 }
             }
-            .navigationTitle("Favorites")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Back") { dismiss() }
-                }
-            }
         }
+        .navigationTitle("Favorites")
+        .navigationBarTitleDisplayMode(.inline)
     }
 }

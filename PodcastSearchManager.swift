@@ -3,12 +3,13 @@
 //  2 Music 2 Furious - MILESTONE 5
 //
 //  Search podcasts via iTunes API and parse RSS feeds
+//  PERFORMANCE UPDATE: Lazy loading for favorites
 //
 
 import Foundation
 import Combine
 
-struct Podcast: Identifiable, Codable {
+struct Podcast: Identifiable, Codable, Hashable {
     let id: Int
     let title: String
     let author: String
@@ -42,14 +43,25 @@ class PodcastSearchManager: ObservableObject {
     @Published var episodes: [Episode] = []
     @Published var isLoadingEpisodes = false
     @Published var favoritePodcasts: [Podcast] = []
+    @Published var isLoaded = false
+    
+    // MARK: - LAZY LOADING: Empty init
     
     init() {
+        // Favorites loaded lazily via loadIfNeeded()
+    }
+    
+    /// Call this before accessing favorites - loads from disk if not already loaded
+    func loadIfNeeded() {
+        guard !isLoaded else { return }
         loadFavorites()
+        isLoaded = true
     }
     
     // MARK: - Favorites Management
     
     func toggleFavorite(_ podcast: Podcast) {
+        loadIfNeeded()
         if isFavorite(podcast) {
             favoritePodcasts.removeAll { $0.id == podcast.id }
         } else {
@@ -59,6 +71,7 @@ class PodcastSearchManager: ObservableObject {
     }
     
     func isFavorite(_ podcast: Podcast) -> Bool {
+        loadIfNeeded()
         return favoritePodcasts.contains { $0.id == podcast.id }
     }
     

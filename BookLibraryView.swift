@@ -3,6 +3,8 @@
 //  2 Music 2 Furious - MILESTONE 11
 //
 //  Audiobook library - Uses SharedComponents for consistency
+//  UPDATED: Added preloadDurations call when opening book detail
+//  UPDATED: Passes Book Cover Art to AudioPlayer for Background Blur
 //
 
 import SwiftUI
@@ -114,13 +116,18 @@ struct BookLibraryView: View {
     }
     
     private func playBook(_ book: Book, startingAt index: Int? = nil) {
+        // UPDATED: Pass cover art to player
+        speechPlayer.setExternalArtwork(from: book.coverArtUrl)
+        
         speechPlayer.clearQueue()
         for chapter in book.chapters { speechPlayer.addTrackToQueue(chapter) }
         let startIndex = index ?? book.currentChapterIndex
         if speechPlayer.queue.count > 0 {
             let safeIndex = min(max(0, startIndex), speechPlayer.queue.count - 1)
-            speechPlayer.loadTrack(at: safeIndex)
-            speechPlayer.play()
+            
+            // Pass the cover art here!
+            speechPlayer.currentIndex = safeIndex
+            speechPlayer.playNow(speechPlayer.queue[safeIndex], artworkURL: book.coverArtUrl)
         }
         dismiss()
     }
@@ -290,6 +297,10 @@ struct LocalBookDetailView: View {
         }
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
+        // PERFORMANCE: Preload durations for this book's chapters in background
+        .onAppear {
+            bookManager.preloadDurations(for: book)
+        }
     }
 
     private func showToast(_ message: String) {

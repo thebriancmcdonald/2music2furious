@@ -1,9 +1,9 @@
 //
 //  QueueView.swift
-//  2 Music 2 Furious - MILESTONE 11
+//  2 Music 2 Furious - MILESTONE 15
 //
-//  Queue management with Clear and Shuffle buttons
-//  Uses SharedComponents for consistency
+//  Shows the current play queue and allows playback control
+//  FIXED: Matches AudioPlayer API
 //
 
 import SwiftUI
@@ -13,141 +13,89 @@ struct QueueView: View {
     let title: String
     let dismiss: () -> Void
     
+    init(player: AudioPlayer, title: String = "Queue", dismiss: @escaping () -> Void) {
+        self.player = player
+        self.title = title
+        self.dismiss = dismiss
+    }
+    
     var body: some View {
         NavigationView {
             ZStack {
                 GlassBackgroundView()
-                
-                List {
+                VStack(spacing: 0) {
+                    HStack {
+                        Text(title).font(.title2.weight(.bold))
+                        Spacer()
+                        GlassCloseButton(action: dismiss)
+                    }
+                    .padding().background(.ultraThinMaterial)
+                    
                     if player.queue.isEmpty {
-                        GlassEmptyStateView(
-                            icon: "list.bullet",
-                            title: "Queue is empty",
-                            subtitle: "Add tracks from your library"
-                        )
-                        .listRowBackground(Color.clear)
-                        .listRowSeparator(.hidden)
-                        .frame(height: 300)
+                        VStack(spacing: 20) {
+                            Spacer()
+                            Image(systemName: "music.note.list").font(.system(size: 50)).foregroundColor(.secondary)
+                            Text("Queue is empty").font(.headline).foregroundColor(.secondary)
+                            Spacer()
+                        }
                     } else {
-                        ForEach(Array(player.queue.enumerated()), id: \.element.id) { index, track in
-                            QueueRow(
-                                track: track,
-                                index: index,
-                                isCurrentTrack: index == player.currentIndex,
-                                onTap: {
-                                    player.playFromQueue(at: index)
-                                    dismiss()
-                                }
-                            )
-                            .glassListRow()
-                        }
-                        .onMove { from, to in
-                            player.queue.move(fromOffsets: from, toOffset: to)
-                            if let fromIndex = from.first {
-                                if fromIndex == player.currentIndex {
-                                    player.currentIndex = to > fromIndex ? to - 1 : to
-                                } else if fromIndex < player.currentIndex && to > player.currentIndex {
-                                    player.currentIndex -= 1
-                                } else if fromIndex > player.currentIndex && to <= player.currentIndex {
-                                    player.currentIndex += 1
-                                }
-                            }
-                        }
-                        .onDelete { offsets in
-                            for offset in offsets {
-                                if offset < player.currentIndex {
-                                    player.currentIndex -= 1
-                                } else if offset == player.currentIndex {
-                                    player.pause()
-                                }
-                            }
-                            player.queue.remove(atOffsets: offsets)
-                            
-                            if player.queue.isEmpty {
-                                player.currentTrack = nil
-                                player.currentIndex = 0
-                            } else if player.currentIndex >= player.queue.count {
-                                player.currentIndex = player.queue.count - 1
-                            }
-                        }
-                    }
-                }
-                .listStyle(.plain)
-                .scrollContentBackground(.hidden)
-            }
-            .navigationTitle(title)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    if !player.queue.isEmpty {
-                        HStack(spacing: 16) {
-                            // Clear button
-                            Button(action: { player.clearQueue() }) {
-                                Text("Clear")
-                                    .foregroundColor(.red)
-                            }
-                            
-                            // Shuffle button (Music only)
-                            if player.playerType == "Music" {
-                                Button(action: { player.shuffle() }) {
-                                    HStack(spacing: 4) {
-                                        Image(systemName: "shuffle")
-                                        if player.isShuffled {
-                                            Text("On")
-                                                .font(.system(size: 12))
+                        ScrollView {
+                            LazyVStack(spacing: 8) {
+                                ForEach(0..<player.queue.count, id: \.self) { index in
+                                    QueueRow(
+                                        track: player.queue[index],
+                                        index: index,
+                                        isCurrent: index == player.currentIndex,
+                                        isPlaying: player.isPlaying,
+                                        onTap: {
+                                            player.playFromQueue(at: index)
                                         }
-                                    }
-                                    .foregroundColor(player.isShuffled ? .orange : .blue)
+                                    )
                                 }
-                            }
+                            }.padding()
                         }
                     }
+                    if !player.queue.isEmpty {
+                        Button(action: { player.clearQueue() }) {
+                            Text("Clear Queue").font(.headline).foregroundColor(.white).frame(maxWidth: .infinity).padding()
+                                .background(Color.red.opacity(0.2)).background(.ultraThinMaterial).cornerRadius(12)
+                        }.padding()
+                    }
                 }
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Done") { dismiss() }
-                }
-            }
-        }
+            }.navigationBarHidden(true)
+        }.accentColor(.purple)
     }
 }
 
 struct QueueRow: View {
     let track: Track
     let index: Int
-    let isCurrentTrack: Bool
+    let isCurrent: Bool
+    let isPlaying: Bool
     let onTap: () -> Void
     
     var body: some View {
         Button(action: onTap) {
             HStack(spacing: 12) {
-                Text("\(index + 1)")
-                    .font(.system(size: 14, weight: .medium, design: .rounded))
-                    .foregroundColor(isCurrentTrack ? .blue : .secondary)
-                    .frame(width: 28)
-                
+                ZStack {
+                    if isCurrent {
+                        Image(systemName: isPlaying ? "speaker.wave.3.fill" : "speaker.fill")
+                            .foregroundColor(.purple).font(.system(size: 14))
+                    } else {
+                        Text("\(index + 1)").font(.caption.weight(.bold)).foregroundColor(.secondary)
+                    }
+                }.frame(width: 30)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(track.title)
-                        .font(.system(size: 16, weight: isCurrentTrack ? .semibold : .regular))
-                        .foregroundColor(.primary)
-                        .lineLimit(1)
-                    Text(track.artist)
-                        .font(.system(size: 13))
-                        .foregroundColor(.secondary)
-                        .lineLimit(1)
+                    Text(track.title).font(.system(size: 16, weight: isCurrent ? .bold : .medium))
+                        .foregroundColor(isCurrent ? .purple : .primary).lineLimit(1)
+                    Text(track.artist).font(.caption).foregroundColor(.secondary).lineLimit(1)
                 }
-                
                 Spacer()
-                
-                if isCurrentTrack {
-                    Image(systemName: "speaker.wave.2.fill")
-                        .font(.system(size: 14))
-                        .foregroundColor(.blue)
-                }
             }
-            .padding(.vertical, 8)
-            .padding(.horizontal, 12)
-            .glassCard()
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(PlainButtonStyle())
+            .padding(12)
+            .background(isCurrent ? Color.purple.opacity(0.1) : Color.clear)
+            .background(.ultraThinMaterial).cornerRadius(12)
+            .overlay(RoundedRectangle(cornerRadius: 12).stroke(isCurrent ? Color.purple.opacity(0.3) : Color.white.opacity(0.1), lineWidth: 1))
+        }.buttonStyle(PlainButtonStyle())
     }
 }

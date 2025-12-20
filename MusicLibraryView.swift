@@ -1,11 +1,12 @@
 //
 //  MusicLibraryView.swift
-//  2 Music 2 Furious - MILESTONE 11
+//  2 Music 2 Furious - MILESTONE 12
 //
 //  Features:
 //  - Filter tabs: Playlists, Artists, Albums, Songs, Uploads
 //  - Drill-down navigation for Albums/Artists/Playlists
 //  - Uses SharedComponents for consistency
+//  - UPDATED: NavigationStack for modern navigation
 //
 
 import SwiftUI
@@ -34,7 +35,7 @@ struct MusicLibraryView: View {
     }
     
     var body: some View {
-        NavigationView {
+        NavigationStack {
             ZStack {
                 GlassBackgroundView()
                 
@@ -65,7 +66,7 @@ struct MusicLibraryView: View {
                 handleFileUpload(result: result)
             }
         }
-        .accentColor(.royalPurple) // Global tint for this view
+        .accentColor(.royalPurple)
     }
     
     // MARK: - Subviews
@@ -133,7 +134,7 @@ struct MusicLibraryView: View {
     @ViewBuilder
     private func tabBackground(for tab: LibraryTab) -> some View {
         if selectedTab == tab {
-            Color.royalPurple // UPDATED: Selected tab is now Royal Purple
+            Color.royalPurple
         } else {
             Rectangle().fill(.ultraThinMaterial)
         }
@@ -279,7 +280,7 @@ struct MusicLibraryView: View {
         if let track = library.createTrack(from: item) {
             UIImpactFeedbackGenerator(style: .medium).impactOccurred()
             musicPlayer.playNow(track)
-            musicPlayer.play() // UPDATED: Explicitly start playback
+            musicPlayer.play()
             dismiss()
         }
     }
@@ -297,7 +298,7 @@ struct MusicLibraryView: View {
         guard let firstTrack = tracks.first else { return }
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         musicPlayer.playNow(firstTrack)
-        musicPlayer.play() // UPDATED: Explicitly start playback
+        musicPlayer.play()
         for track in tracks.dropFirst() { musicPlayer.addTrackToQueue(track) }
         dismiss()
     }
@@ -314,7 +315,7 @@ struct MusicLibraryView: View {
         guard let firstTrack = tracks.first else { return }
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         musicPlayer.playNow(firstTrack)
-        musicPlayer.play() // UPDATED: Explicitly start playback
+        musicPlayer.play()
         for track in tracks.dropFirst() { musicPlayer.addTrackToQueue(track) }
         dismiss()
     }
@@ -331,7 +332,7 @@ struct MusicLibraryView: View {
         guard let firstTrack = tracks.first else { return }
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         musicPlayer.playNow(firstTrack)
-        musicPlayer.play() // UPDATED: Explicitly start playback
+        musicPlayer.play()
         for track in tracks.dropFirst() { musicPlayer.addTrackToQueue(track) }
         dismiss()
     }
@@ -346,7 +347,7 @@ struct MusicLibraryView: View {
     private func playUploadedTrack(_ track: Track) {
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         musicPlayer.playNow(track)
-        musicPlayer.play() // UPDATED: Explicitly start playback
+        musicPlayer.play()
         dismiss()
     }
     
@@ -430,7 +431,7 @@ struct MusicCollectionDetailView: View {
                         GlassActionButton(
                             title: "Play All",
                             icon: "play.fill",
-                            color: .deepResumePurple, // UPDATED: Matches Resume Button style
+                            color: .deepResumePurple,
                             action: {
                                 onPlayAll()
                                 dismiss()
@@ -447,7 +448,7 @@ struct MusicCollectionDetailView: View {
                             Button(action: {
                                 if let track = library.createTrack(from: item) {
                                     musicPlayer.playNow(track)
-                                    musicPlayer.play() // UPDATED: Explicitly start playback
+                                    musicPlayer.play()
                                     dismiss()
                                 }
                             }) {
@@ -470,7 +471,7 @@ struct MusicCollectionDetailView: View {
                                     Spacer()
                                     Image(systemName: "play.circle")
                                         .font(.system(size: 20))
-                                        .foregroundColor(.royalPurple.opacity(0.6)) // UPDATED: Purple play icon
+                                        .foregroundColor(.royalPurple.opacity(0.6))
                                 }
                                 .padding(12)
                                 .glassCard()
@@ -668,7 +669,7 @@ struct UploadsListView: View {
                         .font(.system(size: 14))
                         .foregroundColor(.secondary)
                 }
-                .foregroundColor(.royalPurple) // UPDATED: Royal Purple
+                .foregroundColor(.royalPurple)
                 .padding()
                 .glassCard()
             }
@@ -821,9 +822,9 @@ struct GlassUploadedTrackRow: View {
     var body: some View {
         HStack(spacing: 12) {
             RoundedRectangle(cornerRadius: 8)
-                .fill(Color.royalPurple.opacity(0.1)) // UPDATED: Purple background
+                .fill(Color.royalPurple.opacity(0.1))
                 .frame(width: 44, height: 44)
-                .overlay(Image(systemName: "music.note").foregroundColor(.royalPurple)) // UPDATED: Purple icon
+                .overlay(Image(systemName: "music.note").foregroundColor(.royalPurple))
             VStack(alignment: .leading, spacing: 2) {
                 Text(track.title).font(.system(size: 15, weight: .medium)).foregroundColor(.primary).lineLimit(1)
                 Text("Uploaded").font(.caption).foregroundColor(.secondary)
