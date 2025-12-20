@@ -1,9 +1,9 @@
 //
 //  PodcastSearchManager.swift
-//  2 Music 2 Furious - MILESTONE 5
+//  2 Music 2 Furious
 //
 //  Search podcasts via iTunes API and parse RSS feeds
-//  PERFORMANCE UPDATE: Lazy loading for favorites
+//  UPDATED: Added Played Episode Tracking (Persistent)
 //
 
 import Foundation
@@ -43,19 +43,51 @@ class PodcastSearchManager: ObservableObject {
     @Published var episodes: [Episode] = []
     @Published var isLoadingEpisodes = false
     @Published var favoritePodcasts: [Podcast] = []
+    @Published var playedEpisodeURLs: Set<String> = [] // NEW: Track played status
     @Published var isLoaded = false
     
-    // MARK: - LAZY LOADING: Empty init
+    // MARK: - LAZY LOADING
     
     init() {
-        // Favorites loaded lazily via loadIfNeeded()
+        // Favorites and Played status loaded lazily via loadIfNeeded()
     }
     
-    /// Call this before accessing favorites - loads from disk if not already loaded
+    /// Call this before accessing data - loads from disk if not already loaded
     func loadIfNeeded() {
         guard !isLoaded else { return }
         loadFavorites()
+        loadPlayedStatus() // Load played episodes
         isLoaded = true
+    }
+    
+    // MARK: - Played Status Management (NEW)
+    
+    func togglePlayed(_ episode: Episode) {
+        loadIfNeeded()
+        if playedEpisodeURLs.contains(episode.audioUrl) {
+            playedEpisodeURLs.remove(episode.audioUrl)
+        } else {
+            playedEpisodeURLs.insert(episode.audioUrl)
+        }
+        savePlayedStatus()
+    }
+    
+    func isPlayed(_ episode: Episode) -> Bool {
+        // We can check directly, assuming loadIfNeeded is called by the view
+        return playedEpisodeURLs.contains(episode.audioUrl)
+    }
+    
+    private func savePlayedStatus() {
+        if let encoded = try? JSONEncoder().encode(playedEpisodeURLs) {
+            UserDefaults.standard.set(encoded, forKey: "playedEpisodeURLs")
+        }
+    }
+    
+    private func loadPlayedStatus() {
+        if let data = UserDefaults.standard.data(forKey: "playedEpisodeURLs"),
+           let decoded = try? JSONDecoder().decode(Set<String>.self, from: data) {
+            playedEpisodeURLs = decoded
+        }
     }
     
     // MARK: - Favorites Management

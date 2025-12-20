@@ -1,9 +1,9 @@
 //
 //  BookManager.swift
-//  2 Music 2 Furious - MILESTONE 14
+//  2 Music 2 Furious - MILESTONE 14.5
 //
 //  Shared Models, Download Logic, and Book Management
-//  FIXED: Reverted to synchronous metadata loading to fix build errors
+//  UPDATED: Added Played Chapter Tracking (Persistent)
 //
 
 import Foundation
@@ -143,20 +143,55 @@ class BookManager: ObservableObject {
     @Published var isLoaded = false
     @Published var calculatedDurations: [String: String] = [:]
     
+    // NEW: Played Status Tracking
+    @Published var playedChapterIDs: Set<String> = []
+    
     private let userDefaults = UserDefaults.standard
     private let booksKey = "savedBooks"
     private let durationsKey = "cachedDurations"
+    private let playedChaptersKey = "playedChapters" // Persistence Key
     private let calculationQueue = DispatchQueue(label: "durationCalculation", qos: .utility)
     
     init() {
         if let cached = userDefaults.dictionary(forKey: durationsKey) as? [String: String] { calculatedDurations = cached }
+        // Played status loaded in loadIfNeeded
     }
     
     func loadIfNeeded() {
         guard !isLoaded else { return }
         if let data = userDefaults.data(forKey: booksKey), let decoded = try? JSONDecoder().decode([Book].self, from: data) { books = decoded }
+        
+        // Load Played Status
+        if let data = userDefaults.data(forKey: playedChaptersKey),
+           let decoded = try? JSONDecoder().decode(Set<String>.self, from: data) {
+            playedChapterIDs = decoded
+        }
+        
         isLoaded = true
     }
+    
+    // MARK: - Played Status Logic
+    
+    func togglePlayed(chapterId: String) {
+        if playedChapterIDs.contains(chapterId) {
+            playedChapterIDs.remove(chapterId)
+        } else {
+            playedChapterIDs.insert(chapterId)
+        }
+        savePlayedStatus()
+    }
+    
+    func isPlayed(chapterId: String) -> Bool {
+        return playedChapterIDs.contains(chapterId)
+    }
+    
+    private func savePlayedStatus() {
+        if let encoded = try? JSONEncoder().encode(playedChapterIDs) {
+            userDefaults.set(encoded, forKey: playedChaptersKey)
+        }
+    }
+    
+    // MARK: - Duration Logic
     
     func getTrackDuration(track: Track) -> String {
         if let cached = calculatedDurations[track.filename] { return cached }
@@ -176,7 +211,6 @@ class BookManager: ObservableObject {
             var result = "--:--"
             if FileManager.default.fileExists(atPath: fileURL.path) {
                 let asset = AVURLAsset(url: fileURL)
-                // Use deprecated but synchronous property to avoid async/await issues
                 let duration = asset.duration.seconds
                 if duration.isFinite && duration > 0 {
                     let s = max(0, Int(duration))
@@ -222,7 +256,6 @@ class BookManager: ObservableObject {
         guard let filename = filename else { return nil }
         let fileURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent(filename)
         let asset = AVURLAsset(url: fileURL)
-        // Use deprecated but synchronous property to avoid async/await issues
         for item in asset.commonMetadata {
             if item.commonKey == .commonKeyArtwork, let data = item.dataValue { return data }
         }

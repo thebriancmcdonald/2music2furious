@@ -1,10 +1,9 @@
 //
 //  BookLibraryView.swift
-//  2 Music 2 Furious - MILESTONE 11
+//  2 Music 2 Furious - MILESTONE 14.5
 //
 //  Audiobook library - Uses SharedComponents for consistency
-//  UPDATED: Added preloadDurations call when opening book detail
-//  UPDATED: Passes Book Cover Art to AudioPlayer for Background Blur
+//  UPDATED: Added Played Status Tracking via GlassEpisodeRow
 //
 
 import SwiftUI
@@ -116,16 +115,12 @@ struct BookLibraryView: View {
     }
     
     private func playBook(_ book: Book, startingAt index: Int? = nil) {
-        // UPDATED: Pass cover art to player
         speechPlayer.setExternalArtwork(from: book.coverArtUrl)
-        
         speechPlayer.clearQueue()
         for chapter in book.chapters { speechPlayer.addTrackToQueue(chapter) }
         let startIndex = index ?? book.currentChapterIndex
         if speechPlayer.queue.count > 0 {
             let safeIndex = min(max(0, startIndex), speechPlayer.queue.count - 1)
-            
-            // Pass the cover art here!
             speechPlayer.currentIndex = safeIndex
             speechPlayer.playNow(speechPlayer.queue[safeIndex], artworkURL: book.coverArtUrl)
         }
@@ -161,7 +156,8 @@ struct LocalBookDetailView: View {
         if filter == .downloaded {
             return book.chapters.enumerated().map { (index, track) in
                 let duration = bookManager.getTrackDuration(track: track)
-                return DisplayChapter(index: index, title: track.title, isDownloaded: true, filename: track.filename, remoteChapter: nil, duration: duration)
+                // Use filename as a stable ID for local files
+                return DisplayChapter(index: index, title: track.title, isDownloaded: true, filename: track.filename, remoteChapter: nil, duration: duration, uniqueId: track.filename)
             }
         } else {
             if let remote = book.librivoxChapters, !remote.isEmpty {
@@ -170,25 +166,26 @@ struct LocalBookDetailView: View {
                     let match = book.chapters.first { track in
                         track.filename.contains("Chapter_\(String(format: "%03d", targetIndex))_")
                     }
-                    return DisplayChapter(index: index, title: remoteChap.title, isDownloaded: match != nil, filename: match?.filename, remoteChapter: remoteChap, duration: remoteChap.formattedDuration)
+                    return DisplayChapter(index: index, title: remoteChap.title, isDownloaded: match != nil, filename: match?.filename, remoteChapter: remoteChap, duration: remoteChap.formattedDuration, uniqueId: remoteChap.id)
                 }
             } else {
                 return book.chapters.enumerated().map { (index, track) in
                     let duration = bookManager.getTrackDuration(track: track)
-                    return DisplayChapter(index: index, title: track.title, isDownloaded: true, filename: track.filename, remoteChapter: nil, duration: duration)
+                    return DisplayChapter(index: index, title: track.title, isDownloaded: true, filename: track.filename, remoteChapter: nil, duration: duration, uniqueId: track.filename)
                 }
             }
         }
     }
     
     struct DisplayChapter: Identifiable {
-        var id: String { title + "\(index)" }
+        var id: String { uniqueId }
         let index: Int
         let title: String
         let isDownloaded: Bool
         let filename: String?
         let remoteChapter: LibriVoxChapter?
         let duration: String
+        let uniqueId: String // Stable ID for tracking played status
     }
     
     var body: some View {
@@ -198,7 +195,6 @@ struct LocalBookDetailView: View {
             List {
                 Section {
                     VStack(spacing: 20) {
-                        // Header
                         MediaDetailHeader(
                             title: book.displayTitle,
                             subtitle: book.displayAuthor,
@@ -209,7 +205,6 @@ struct LocalBookDetailView: View {
                             artworkColor: .royalPurple
                         )
                         
-                        // Resume Button
                         GlassActionButton(
                             title: "Resume",
                             icon: "play.fill",
@@ -217,7 +212,6 @@ struct LocalBookDetailView: View {
                             action: { onPlayChapter(book.currentChapterIndex) }
                         )
                         
-                        // Description
                         if let desc = book.description, !desc.isEmpty {
                             ExpandableDescriptionView(
                                 text: desc.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression),
@@ -227,7 +221,6 @@ struct LocalBookDetailView: View {
                             .accentColor(.royalPurple)
                         }
                         
-                        // Filter
                         GlassSegmentedFilter(
                             selection: $filter,
                             options: FilterOption.allCases.map { ($0, $0.rawValue) },
@@ -242,15 +235,16 @@ struct LocalBookDetailView: View {
                 
                 Section {
                     ForEach(chaptersToDisplay) { chapter in
-                        // UPDATED: Using Unified GlassDownloadRow
-                        // Logic: Tapping the row triggers the action (Download or Play)
-                        GlassDownloadRow(
-                            index: chapter.index + 1,
+                        let isPlayed = bookManager.isPlayed(chapterId: chapter.uniqueId)
+                        
+                        // UPDATED: Use Shared GlassEpisodeRow
+                        GlassEpisodeRow(
                             title: chapter.title,
-                            subtitle: chapter.duration,
+                            duration: chapter.duration,
+                            isPlayed: isPlayed,
                             isDownloaded: chapter.isDownloaded,
                             isDownloading: chapter.remoteChapter != nil && downloadManager.isDownloading(bookId: book.librivoxChapters?.first?.id ?? "", chapterId: chapter.remoteChapter!.id),
-                            color: .royalPurple,
+                            downloadColor: .royalPurple,
                             onDownload: {
                                 if !chapter.isDownloaded, let remote = chapter.remoteChapter {
                                     downloadManager.downloadSingleChapter(
@@ -270,10 +264,21 @@ struct LocalBookDetailView: View {
                             onPlay: {
                                 if let filename = chapter.filename, let realIndex = book.chapters.firstIndex(where: { $0.filename == filename }) {
                                     onPlayChapter(realIndex)
+                                    // Optional: Auto-mark as played?
+                                    // bookManager.togglePlayed(chapterId: chapter.uniqueId)
                                 }
                             }
                         )
                         .glassListRow()
+                        // SWIPE ACTION: Toggle Played
+                        .swipeActions(edge: .leading) {
+                            Button {
+                                bookManager.togglePlayed(chapterId: chapter.uniqueId)
+                                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                            } label: {
+                                Label(isPlayed ? "Unmark" : "Played", systemImage: isPlayed ? "eye.slash" : "eye")
+                            }.tint(.orange)
+                        }
                         .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                             if chapter.isDownloaded, let filename = chapter.filename {
                                 Button(role: .destructive) {
@@ -297,7 +302,6 @@ struct LocalBookDetailView: View {
         }
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
-        // PERFORMANCE: Preload durations for this book's chapters in background
         .onAppear {
             bookManager.preloadDurations(for: book)
         }

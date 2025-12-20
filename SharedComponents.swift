@@ -1,9 +1,9 @@
 //
 //  SharedComponents.swift
-//  2 Music 2 Furious - MILESTONE 11
+//  2 Music 2 Furious - MILESTONE 13
 //
 //  Unified Glass UI Components
-//  FIXED: Added GlassPlusButton so MusicLibrary builds
+//  ADDED: GlassEpisodeRow for consistent "Played" tracking across Podcasts & Audiobooks
 //
 
 import SwiftUI
@@ -147,7 +147,7 @@ struct ExpandableDescriptionView: View {
 struct MediaArtworkView: View {
     let url: URL?
     var data: Data? = nil
-    var image: UIImage? = nil // Added for compatibility
+    var image: UIImage? = nil
     let size: CGFloat
     var cornerRadius: CGFloat = 20
     var fallbackIcon: String = "music.note"
@@ -306,7 +306,7 @@ struct GlassMediaListRow: View {
     }
 }
 
-// MARK: - Glass Download Row
+// MARK: - Glass Download Row (Simple)
 
 struct GlassDownloadRow: View {
     var index: Int? = nil
@@ -345,6 +345,68 @@ struct GlassDownloadRow: View {
                     ProgressView().scaleEffect(0.8).frame(width: 28, height: 28)
                 } else {
                     Image(systemName: "arrow.down.circle").foregroundColor(color).font(.system(size: 24))
+                }
+            }
+            .padding(12).glassCard(cornerRadius: 12)
+        }
+        .buttonStyle(PlainButtonStyle())
+    }
+}
+
+// MARK: - Glass Episode Row (Advanced - For Podcasts/Audiobooks)
+// Handles "Played" dimming logic
+
+struct GlassEpisodeRow: View {
+    let title: String
+    let duration: String
+    let isPlayed: Bool
+    let isDownloaded: Bool
+    let isDownloading: Bool
+    var downloadColor: Color = .royalPurple
+    let onDownload: () -> Void
+    let onPlay: (() -> Void)?
+    
+    var body: some View {
+        Button(action: {
+            if isDownloading { return }
+            if isDownloaded { onPlay?() } else { onDownload() }
+        }) {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 2) {
+                    // Title: Dims if played
+                    Text(title)
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundColor(isPlayed ? .secondary : .primary) // DIM TITLE ONLY
+                        .lineLimit(1)
+                        .multilineTextAlignment(.leading)
+                    
+                    // Subtitle: Remains legible + Played Status
+                    HStack(spacing: 4) {
+                        Text(duration)
+                        if isPlayed {
+                            Text("•")
+                            Image(systemName: "checkmark.circle.fill")
+                                .font(.system(size: 10))
+                            Text("Played")
+                        }
+                    }
+                    .font(.caption)
+                    .foregroundColor(.secondary) // STANDARD LEGIBLE COLOR
+                }
+                Spacer()
+                if isDownloaded {
+                    if onPlay != nil {
+                        ZStack {
+                            Circle().fill(Color(white: 0.3)).frame(width: 28, height: 28)
+                            Image(systemName: "play.fill").font(.system(size: 12)).foregroundColor(.white).offset(x: 1)
+                        }
+                    } else {
+                        Image(systemName: "checkmark.circle.fill").foregroundColor(.green).font(.system(size: 20))
+                    }
+                } else if isDownloading {
+                    ProgressView().scaleEffect(0.8).frame(width: 28, height: 28)
+                } else {
+                    Image(systemName: "arrow.down.circle").foregroundColor(downloadColor).font(.system(size: 24))
                 }
             }
             .padding(12).glassCard(cornerRadius: 12)
@@ -474,7 +536,6 @@ struct GlassCloseButton: View {
     }
 }
 
-// RESTORED: GlassPlusButton
 struct GlassPlusButton: View {
     let action: () -> Void
     var body: some View {
@@ -522,8 +583,6 @@ extension View {
         self.listRowBackground(Color.clear).listRowSeparator(.hidden).listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
     }
 }
-
-// MARK: - BorderlessButtonStyle (Restored)
 
 struct BorderlessButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
