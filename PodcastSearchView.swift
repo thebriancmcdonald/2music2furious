@@ -257,26 +257,35 @@ struct PodcastSearchView: View {
     }
     
     private func playEpisode(filename: String) {
-        // 1. Clean filename
-        let cleanTitle = filename
+        // Remove extension
+        let nameWithoutExt = filename
             .replacingOccurrences(of: ".mp3", with: "")
             .replacingOccurrences(of: ".m4a", with: "")
-            .replacingOccurrences(of: "_", with: " ")
         
-        let components = cleanTitle.components(separatedBy: " ")
-        let podcastName = components.first ?? "Unknown Podcast"
-        
-        // 2. Try to find matching artwork from favorites
+        var podcastName = "Podcast"
+        var episodeTitle = nameWithoutExt
         var artworkUrl: URL? = nil
-        if let match = searchManager.favoritePodcasts.first(where: { $0.title.contains(podcastName) || podcastName.contains($0.title) }) {
-            artworkUrl = URL(string: match.artworkUrl)
+        
+        // Try to find matching podcast from favorites
+        // Filename format is "PodcastTitle_EpisodeTitle" (special chars replaced with _)
+        for favorite in searchManager.favoritePodcasts {
+            let podcastPrefix = favorite.title + "_"
+            if nameWithoutExt.hasPrefix(podcastPrefix) {
+                podcastName = favorite.title
+                episodeTitle = String(nameWithoutExt.dropFirst(podcastPrefix.count))
+                artworkUrl = URL(string: favorite.artworkUrl)
+                break
+            }
         }
         
-        // 3. Play
-        let track = Track(title: cleanTitle, artist: "Podcast", filename: filename)
-        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        // Fallback: try to split on first underscore if no favorite matched
+        if podcastName == "Podcast", let underscoreIndex = nameWithoutExt.firstIndex(of: "_") {
+            podcastName = String(nameWithoutExt[..<underscoreIndex])
+            episodeTitle = String(nameWithoutExt[nameWithoutExt.index(after: underscoreIndex)...])
+        }
         
-        // Pass artworkURL to playNow
+        let track = Track(title: episodeTitle, artist: podcastName, filename: filename)
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         speechPlayer.playNow(track, artworkURL: artworkUrl)
         dismiss()
     }
@@ -299,15 +308,36 @@ struct GlassDownloadedRow: View {
     
     var podcastName: String {
         let cleanName = filename.replacingOccurrences(of: ".mp3", with: "").replacingOccurrences(of: ".m4a", with: "")
-        let components = cleanName.components(separatedBy: "_")
-        return components.first ?? "Unknown Podcast"
+        
+        // Try to find matching podcast from favorites for accurate name
+        for favorite in searchManager.favoritePodcasts {
+            let podcastPrefix = favorite.title + "_"
+            if cleanName.hasPrefix(podcastPrefix) {
+                return favorite.title
+            }
+        }
+        
+        // Fallback: split on first underscore
+        if let underscoreIndex = cleanName.firstIndex(of: "_") {
+            return String(cleanName[..<underscoreIndex])
+        }
+        return "Unknown Podcast"
     }
     
     var episodeName: String {
         let cleanName = filename.replacingOccurrences(of: ".mp3", with: "").replacingOccurrences(of: ".m4a", with: "")
-        let components = cleanName.components(separatedBy: "_")
-        if components.count > 1 {
-            return components.dropFirst().joined(separator: " ")
+        
+        // Try to find matching podcast from favorites for accurate split
+        for favorite in searchManager.favoritePodcasts {
+            let podcastPrefix = favorite.title + "_"
+            if cleanName.hasPrefix(podcastPrefix) {
+                return String(cleanName.dropFirst(podcastPrefix.count))
+            }
+        }
+        
+        // Fallback: split on first underscore
+        if let underscoreIndex = cleanName.firstIndex(of: "_") {
+            return String(cleanName[cleanName.index(after: underscoreIndex)...])
         }
         return cleanName
     }

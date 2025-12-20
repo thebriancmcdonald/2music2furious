@@ -1,10 +1,9 @@
 //
 //  AudioPlayer.swift
-//  2 Music 2 Furious - MILESTONE 11
+//  2 Music 2 Furious
 //
-//  PERFORMANCE UPDATES:
-//  - Added Lock Screen Support (MPNowPlayingInfoCenter)
-//  - Added playFromQueue for QueueView compatibility
+//  UPDATED: Smart Resume Logic & Custom Logo Support
+//  FIXED: Lock screen metadata formatting and resume memory
 //
 
 import Foundation
@@ -16,15 +15,18 @@ import SwiftUI
 
 class AudioPlayer: NSObject, ObservableObject {
     
+    // MARK: - Published State
     @Published var isPlaying = false {
-        didSet { updateNowPlayingInfo() }
+        didSet { LockScreenManager.shared.update() }
     }
-    @Published var currentTrack: Track?
+    @Published var currentTrack: Track? {
+        didSet { LockScreenManager.shared.update() }
+    }
     @Published var queue: [Track] = []
     @Published var currentIndex: Int = 0
     @Published var isShuffled = false
     @Published var artwork: UIImage? = nil {
-        didSet { updateNowPlayingInfo() }
+        didSet { LockScreenManager.shared.update() }
     }
     @Published var volume: Float = 0.5 {
         didSet { updatePlayerVolume() }
@@ -39,10 +41,11 @@ class AudioPlayer: NSObject, ObservableObject {
         didSet {
             if isUsingEngine { timePitchNode.rate = playbackSpeed }
             else { avPlayer?.rate = isPlaying ? playbackSpeed : 0 }
-            updateNowPlayingInfo()
+            LockScreenManager.shared.update()
         }
     }
     
+    // MARK: - Internal Properties
     private static var artworkCache: [String: UIImage] = [:]
     private static let cacheQueue = DispatchQueue(label: "artworkCache", attributes: .concurrent)
     private static func getCachedArtwork(for key: String) -> UIImage? { cacheQueue.sync { artworkCache[key] } }
@@ -78,7 +81,6 @@ class AudioPlayer: NSObject, ObservableObject {
     private var playerItemObserver: NSKeyValueObservation?
     private var timeObserver: Any?
     
-    // NEW:
     private var currentExternalArtworkURL: URL? = nil
     
     let playerType: String
@@ -98,21 +100,6 @@ class AudioPlayer: NSObject, ObservableObject {
         engine.connect(timePitchNode, to: boosterNode, format: nil)
         engine.connect(boosterNode, to: engine.mainMixerNode, format: nil)
         boosterNode.outputVolume = 1.0
-    }
-    
-    func updateNowPlayingInfo() {
-        var info = [String: Any]()
-        if let track = currentTrack {
-            info[MPMediaItemPropertyTitle] = track.title
-            info[MPMediaItemPropertyArtist] = track.artist
-        }
-        if let image = artwork {
-            info[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
-        }
-        info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = currentTime
-        info[MPMediaItemPropertyPlaybackDuration] = duration
-        info[MPNowPlayingInfoPropertyPlaybackRate] = isPlaying ? playbackSpeed : 0.0
-        MPNowPlayingInfoCenter.default().nowPlayingInfo = info
     }
     
     private func updateAudioEffects() {
@@ -135,7 +122,7 @@ class AudioPlayer: NSObject, ObservableObject {
         guard let url = url else { return }
         URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
             guard let data = data, let image = UIImage(data: data) else { return }
-            DispatchQueue.main.async { self?.artwork = image; self?.updateNowPlayingInfo() }
+            DispatchQueue.main.async { self?.artwork = image }
         }.resume()
     }
     
@@ -146,7 +133,7 @@ class AudioPlayer: NSObject, ObservableObject {
         }
         let urlKey = asset.url.absoluteString
         if let cached = Self.getCachedArtwork(for: urlKey) {
-            DispatchQueue.main.async { withAnimation(.easeIn(duration: 0.3)) { self.artwork = cached; self.updateNowPlayingInfo() } }
+            DispatchQueue.main.async { withAnimation(.easeIn(duration: 0.3)) { self.artwork = cached } }
             return
         }
         DispatchQueue.main.async { self.artwork = nil }
@@ -154,19 +141,19 @@ class AudioPlayer: NSObject, ObservableObject {
         if asset.url.absoluteString.contains("ipod-library") {
             if let libraryArt = extractLibraryArtwork(url: asset.url) {
                 Self.setCachedArtwork(libraryArt, for: urlKey)
-                DispatchQueue.main.async { withAnimation(.easeIn(duration: 0.3)) { self.artwork = libraryArt; self.updateNowPlayingInfo() } }
+                DispatchQueue.main.async { withAnimation(.easeIn(duration: 0.3)) { self.artwork = libraryArt } }
             }
             return
         }
         Task {
             if let image = await extractCommonArtwork(from: asset) {
                 Self.setCachedArtwork(image, for: urlKey)
-                await MainActor.run { withAnimation(.easeIn(duration: 0.3)) { self.artwork = image; self.updateNowPlayingInfo() } }
+                await MainActor.run { withAnimation(.easeIn(duration: 0.3)) { self.artwork = image } }
                 return
             }
             if let image = await extractAllMetadata(from: asset) {
                 Self.setCachedArtwork(image, for: urlKey)
-                await MainActor.run { withAnimation(.easeIn(duration: 0.3)) { self.artwork = image; self.updateNowPlayingInfo() } }
+                await MainActor.run { withAnimation(.easeIn(duration: 0.3)) { self.artwork = image } }
             }
         }
     }
@@ -252,7 +239,7 @@ class AudioPlayer: NSObject, ObservableObject {
         } else {
             loadLocalFile(track: track)
         }
-        updateNowPlayingInfo()
+        LockScreenManager.shared.update()
     }
     
     private func loadLocalFile(track: Track) {
@@ -282,7 +269,7 @@ class AudioPlayer: NSObject, ObservableObject {
         avPlayer = nil
         audioFile = nil
         seekOffset = 0
-        updateNowPlayingInfo()
+        LockScreenManager.shared.update()
     }
     
     private func setupAVPlayer(with item: AVPlayerItem) {
@@ -293,7 +280,7 @@ class AudioPlayer: NSObject, ObservableObject {
                 DispatchQueue.main.async { self?.restoreSavedPosition(); if self?.currentTrack?.filename.starts(with: "http") == true { self?.play() } }
             }
         }
-        timeObserver = avPlayer?.addPeriodicTimeObserver(forInterval: CMTime(seconds: 1, preferredTimescale: 1), queue: .main) { [weak self] _ in self?.updateNowPlayingInfo() }
+        timeObserver = avPlayer?.addPeriodicTimeObserver(forInterval: CMTime(seconds: 1, preferredTimescale: 1), queue: .main) { _ in LockScreenManager.shared.update() }
     }
     
     private func scheduleFileSegment(from startTime: Double) {
@@ -312,14 +299,14 @@ class AudioPlayer: NSObject, ObservableObject {
         if isUsingEngine { if !engine.isRunning { try? engine.start() }; playerNode.play() }
         else { avPlayer?.play(); avPlayer?.rate = playbackSpeed }
         isPlaying = true
-        updateNowPlayingInfo()
+        LockScreenManager.shared.update()
     }
     
     func pause() {
         saveCurrentPosition()
         if isUsingEngine { playerNode.pause(); engine.pause() } else { avPlayer?.pause() }
         isPlaying = false
-        updateNowPlayingInfo()
+        LockScreenManager.shared.update()
     }
     
     func togglePlayPause() { isPlaying ? pause() : play() }
@@ -338,7 +325,7 @@ class AudioPlayer: NSObject, ObservableObject {
     func seek(to time: Double) {
         if isUsingEngine { scheduleFileSegment(from: time); if isPlaying { playerNode.play() } }
         else { avPlayer?.seek(to: CMTimeMakeWithSeconds(time, preferredTimescale: 600)) }
-        updateNowPlayingInfo()
+        LockScreenManager.shared.update()
     }
     
     func skipForward(seconds: Double = 30) { seek(to: min(duration, currentTime + seconds)) }
@@ -356,7 +343,7 @@ class AudioPlayer: NSObject, ObservableObject {
         if isShuffled { let current = currentTrack; queue.shuffle(); if let t = current, let idx = queue.firstIndex(where: { $0.id == t.id }) { currentIndex = idx } }
     }
     
-    func clearQueue() { saveCurrentPosition(); stopCurrentPlayback(); queue.removeAll(); currentTrack = nil; currentIndex = 0; isPlaying = false; artwork = nil; updateNowPlayingInfo() }
+    func clearQueue() { saveCurrentPosition(); stopCurrentPlayback(); queue.removeAll(); currentTrack = nil; currentIndex = 0; isPlaying = false; artwork = nil; LockScreenManager.shared.update() }
     
     func addTrack(from url: URL) {
         let filename = url.lastPathComponent
@@ -379,4 +366,289 @@ class AudioPlayer: NSObject, ObservableObject {
     static func clearArtworkCache() { cacheQueue.async(flags: .barrier) { artworkCache.removeAll() } }
     
     deinit { NotificationCenter.default.removeObserver(self); playerItemObserver?.invalidate(); if let observer = timeObserver { avPlayer?.removeTimeObserver(observer) }; engine.stop() }
+}
+
+// MARK: - Lock Screen & Remote Command Manager
+
+class LockScreenManager {
+    static let shared = LockScreenManager()
+    
+    weak var musicPlayer: AudioPlayer?
+    weak var speechPlayer: AudioPlayer?
+    
+    // Track what was playing BEFORE the last pause
+    // Only modified in pause/toggle handlers
+    private var musicWasPlaying: Bool = false
+    private var speechWasPlaying: Bool = false
+    
+    private init() {}
+    
+    func setupRemoteCommands() {
+        let center = MPRemoteCommandCenter.shared()
+        
+        // Clear to avoid duplicates
+        center.playCommand.removeTarget(nil)
+        center.pauseCommand.removeTarget(nil)
+        center.togglePlayPauseCommand.removeTarget(nil)
+        center.nextTrackCommand.removeTarget(nil)
+        center.previousTrackCommand.removeTarget(nil)
+        
+        // Toggle (AirPods tap, lock screen play/pause)
+        center.togglePlayPauseCommand.addTarget { [weak self] _ in
+            self?.handleGlobalToggle()
+            return .success
+        }
+        
+        // Explicit Play
+        center.playCommand.addTarget { [weak self] _ in
+            self?.handleResume()
+            return .success
+        }
+        
+        // Explicit Pause
+        center.pauseCommand.addTarget { [weak self] _ in
+            self?.handlePause()
+            return .success
+        }
+        
+        // Next/Previous
+        center.nextTrackCommand.addTarget { [weak self] _ in
+            guard let self = self else { return .commandFailed }
+            if let m = self.musicPlayer, m.isPlaying { m.next(); return .success }
+            if let s = self.speechPlayer, s.isPlaying { s.next(); return .success }
+            if self.musicWasPlaying, let m = self.musicPlayer, m.currentTrack != nil { m.next(); return .success }
+            if self.speechWasPlaying, let s = self.speechPlayer, s.currentTrack != nil { s.next(); return .success }
+            return .commandFailed
+        }
+        
+        center.previousTrackCommand.addTarget { [weak self] _ in
+            guard let self = self else { return .commandFailed }
+            if let m = self.musicPlayer, m.isPlaying { m.previous(); return .success }
+            if let s = self.speechPlayer, s.isPlaying { s.previous(); return .success }
+            if self.musicWasPlaying, let m = self.musicPlayer, m.currentTrack != nil { m.previous(); return .success }
+            if self.speechWasPlaying, let s = self.speechPlayer, s.currentTrack != nil { s.previous(); return .success }
+            return .commandFailed
+        }
+    }
+    
+    /// Master Toggle: Pause all if any playing, Resume last active if none playing
+    func handleGlobalToggle() {
+        guard let music = musicPlayer, let speech = speechPlayer else { return }
+        
+        let musicPlaying = music.isPlaying
+        let speechPlaying = speech.isPlaying
+        
+        if musicPlaying || speechPlaying {
+            // PAUSE: Save what's currently playing, then pause
+            musicWasPlaying = musicPlaying
+            speechWasPlaying = speechPlaying
+            
+            if musicPlaying { music.pause() }
+            if speechPlaying { speech.pause() }
+        } else {
+            // RESUME
+            handleResume()
+        }
+    }
+    
+    /// Resume whatever was last playing
+    private func handleResume() {
+        guard let music = musicPlayer, let speech = speechPlayer else { return }
+        
+        let canResumeMusic = musicWasPlaying && music.currentTrack != nil
+        let canResumeSpeech = speechWasPlaying && speech.currentTrack != nil
+        
+        if canResumeMusic || canResumeSpeech {
+            // Resume what was playing before
+            if canResumeMusic { music.play() }
+            if canResumeSpeech { speech.play() }
+        } else {
+            // Fallback: Nothing tracked, play whatever is loaded
+            // IMPORTANT: Use separate if statements so BOTH can play!
+            if music.currentTrack != nil {
+                musicWasPlaying = true
+                music.play()
+            }
+            if speech.currentTrack != nil {
+                speechWasPlaying = true
+                speech.play()
+            }
+        }
+    }
+    
+    /// Pause everything and save state
+    private func handlePause() {
+        guard let music = musicPlayer, let speech = speechPlayer else { return }
+        
+        // Save what's playing before we pause
+        musicWasPlaying = music.isPlaying
+        speechWasPlaying = speech.isPlaying
+        
+        music.pause()
+        speech.pause()
+    }
+    
+    /// Called when playback state changes - updates Now Playing display
+    func update() {
+        guard let music = musicPlayer, let speech = speechPlayer else { return }
+        
+        let musicPlaying = music.isPlaying
+        let speechPlaying = speech.isPlaying
+        let musicLoaded = music.currentTrack != nil
+        let speechLoaded = speech.currentTrack != nil
+        
+        // Track when something STARTS playing (for in-app controls)
+        // Only SET flags, never clear them - clearing happens implicitly when 
+        // handleGlobalToggle captures the current state before pausing
+        if musicPlaying { musicWasPlaying = true }
+        if speechPlaying { speechWasPlaying = true }
+        
+        // Build Now Playing info
+        var info = [String: Any]()
+        
+        if musicPlaying && speechPlaying {
+            // BOTH PLAYING: Combined display + App Logo
+            info[MPMediaItemPropertyTitle] = "\(music.currentTrack?.title ?? "Music") + \(speech.currentTrack?.title ?? "Speech")"
+            info[MPMediaItemPropertyArtist] = "\(music.currentTrack?.artist ?? "") / \(speech.currentTrack?.artist ?? "")"
+            setAppLogoArtwork(&info)
+            
+        } else if musicPlaying {
+            // ONLY MUSIC PLAYING
+            info[MPMediaItemPropertyTitle] = music.currentTrack?.title ?? "Music"
+            info[MPMediaItemPropertyArtist] = music.currentTrack?.artist ?? ""
+            if let art = music.artwork {
+                info[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: art.size) { _ in art }
+            } else {
+                setAppLogoArtwork(&info) // Fallback for radio/uploads without art
+            }
+            
+        } else if speechPlaying {
+            // ONLY SPEECH PLAYING
+            info[MPMediaItemPropertyTitle] = speech.currentTrack?.title ?? "Speech"
+            info[MPMediaItemPropertyArtist] = speech.currentTrack?.artist ?? ""
+            if let art = speech.artwork {
+                info[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: art.size) { _ in art }
+            } else {
+                setAppLogoArtwork(&info) // Fallback for audiobooks without art
+            }
+            
+        } else {
+            // PAUSED - Show what was last playing
+            let bothWerePlaying = musicWasPlaying && speechWasPlaying && musicLoaded && speechLoaded
+            
+            if bothWerePlaying {
+                info[MPMediaItemPropertyTitle] = "\(music.currentTrack?.title ?? "Music") + \(speech.currentTrack?.title ?? "Speech")"
+                info[MPMediaItemPropertyArtist] = "Paused"
+                setAppLogoArtwork(&info)
+                
+            } else if musicWasPlaying && musicLoaded {
+                info[MPMediaItemPropertyTitle] = music.currentTrack?.title ?? "Music"
+                info[MPMediaItemPropertyArtist] = music.currentTrack?.artist ?? "Paused"
+                if let art = music.artwork {
+                    info[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: art.size) { _ in art }
+                } else {
+                    setAppLogoArtwork(&info)
+                }
+                
+            } else if speechWasPlaying && speechLoaded {
+                info[MPMediaItemPropertyTitle] = speech.currentTrack?.title ?? "Speech"
+                info[MPMediaItemPropertyArtist] = speech.currentTrack?.artist ?? "Paused"
+                if let art = speech.artwork {
+                    info[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: art.size) { _ in art }
+                } else {
+                    setAppLogoArtwork(&info)
+                }
+                
+            } else if musicLoaded {
+                info[MPMediaItemPropertyTitle] = music.currentTrack?.title ?? "Music"
+                info[MPMediaItemPropertyArtist] = music.currentTrack?.artist ?? ""
+                if let art = music.artwork {
+                    info[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: art.size) { _ in art }
+                } else {
+                    setAppLogoArtwork(&info)
+                }
+                
+            } else if speechLoaded {
+                info[MPMediaItemPropertyTitle] = speech.currentTrack?.title ?? "Speech"
+                info[MPMediaItemPropertyArtist] = speech.currentTrack?.artist ?? ""
+                if let art = speech.artwork {
+                    info[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: art.size) { _ in art }
+                } else {
+                    setAppLogoArtwork(&info)
+                }
+                
+            } else {
+                info[MPMediaItemPropertyTitle] = "2 Music 2 Furious"
+                info[MPMediaItemPropertyArtist] = "Ready to Play"
+                setAppLogoArtwork(&info)
+            }
+        }
+        
+        // Time/Duration from appropriate player
+        let primaryPlayer: AudioPlayer
+        if musicPlaying {
+            primaryPlayer = music
+        } else if speechPlaying {
+            primaryPlayer = speech
+        } else if musicWasPlaying && musicLoaded {
+            primaryPlayer = music
+        } else if speechWasPlaying && speechLoaded {
+            primaryPlayer = speech
+        } else if musicLoaded {
+            primaryPlayer = music
+        } else {
+            primaryPlayer = speech
+        }
+        
+        info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = primaryPlayer.currentTime
+        info[MPMediaItemPropertyPlaybackDuration] = primaryPlayer.duration
+        info[MPNowPlayingInfoPropertyPlaybackRate] = primaryPlayer.isPlaying ? Double(primaryPlayer.playbackSpeed) : 0.0
+        
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+    }
+    
+    /// Helper to set app logo artwork with fallback
+    private func setAppLogoArtwork(_ info: inout [String: Any]) {
+        // Try different possible asset names
+        let possibleNames = ["AppLogo", "AppIcon", "logo", "Logo", "app_logo"]
+        
+        for name in possibleNames {
+            if let image = UIImage(named: name) {
+                info[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
+                return
+            }
+        }
+        
+        // Final fallback: Create a simple purple gradient image
+        let size = CGSize(width: 300, height: 300)
+        UIGraphicsBeginImageContextWithOptions(size, false, 0)
+        if let context = UIGraphicsGetCurrentContext() {
+            let colors = [
+                UIColor(red: 0.9, green: 0.2, blue: 0.6, alpha: 1.0).cgColor,
+                UIColor(red: 0.4, green: 0.2, blue: 0.8, alpha: 1.0).cgColor
+            ]
+            let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: colors as CFArray, locations: [0, 1])!
+            context.drawLinearGradient(gradient, start: .zero, end: CGPoint(x: size.width, y: size.height), options: [])
+            
+            // Draw "2♪" text
+            let text = "2♪"
+            let font = UIFont.systemFont(ofSize: 120, weight: .bold)
+            let attributes: [NSAttributedString.Key: Any] = [
+                .font: font,
+                .foregroundColor: UIColor.white
+            ]
+            let textSize = text.size(withAttributes: attributes)
+            let textRect = CGRect(
+                x: (size.width - textSize.width) / 2,
+                y: (size.height - textSize.height) / 2,
+                width: textSize.width,
+                height: textSize.height
+            )
+            text.draw(in: textRect, withAttributes: attributes)
+        }
+        if let fallbackImage = UIGraphicsGetImageFromCurrentImageContext() {
+            info[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: fallbackImage.size) { _ in fallbackImage }
+        }
+        UIGraphicsEndImageContext()
+    }
 }

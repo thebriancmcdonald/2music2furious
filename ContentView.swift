@@ -4,7 +4,7 @@
 //
 //  Main app view with dual audio players
 //  RESTORED: Original UI
-//  FIXED: Global Controls + Initialization arguments
+//  FIXED: UI Header Button now uses Smart Lock Screen Logic
 //
 
 import SwiftUI
@@ -70,7 +70,6 @@ struct ContentView: View {
         .preferredColorScheme(.dark)
         // MARK: - Sheets
         .sheet(isPresented: $showingMusicLibrary) {
-            // FIXED: Argument label
             MusicLibraryView(library: musicLibrary, musicPlayer: musicPlayer, dismiss: { showingMusicLibrary = false })
         }
         .sheet(isPresented: $showingBookLibrary) {
@@ -83,11 +82,9 @@ struct ContentView: View {
             RadioSearchView(radioAPI: radioAPI, musicPlayer: musicPlayer, dismiss: { showingRadioSearch = false })
         }
         .sheet(isPresented: $showingMusicQueue) {
-            // FIXED: Added title
             QueueView(player: musicPlayer, title: "Music Queue", dismiss: { showingMusicQueue = false })
         }
         .sheet(isPresented: $showingSpeechQueue) {
-            // FIXED: Added title
             QueueView(player: speechPlayer, title: "Speech Queue", dismiss: { showingSpeechQueue = false })
         }
         .sheet(isPresented: $showingArticleLibrary) {
@@ -96,8 +93,12 @@ struct ContentView: View {
         // MARK: - Lifecycle
         .onAppear {
             musicLibrary.checkAuthorization()
-            setupGlobalAudioSession()
-            setupGlobalRemoteCommands()
+            setupAudioSession()
+            
+            // Initialize LockScreenManager
+            LockScreenManager.shared.musicPlayer = musicPlayer
+            LockScreenManager.shared.speechPlayer = speechPlayer
+            LockScreenManager.shared.setupRemoteCommands()
             
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                 warmUpManagers()
@@ -156,13 +157,9 @@ struct ContentView: View {
             
             Spacer()
             
+            // UPDATED: Now uses LockScreenManager logic for smart toggle
             Button(action: {
-                if musicPlayer.isPlaying || speechPlayer.isPlaying {
-                    musicPlayer.pause(); speechPlayer.pause()
-                } else {
-                    if musicPlayer.currentTrack != nil { musicPlayer.play() }
-                    if speechPlayer.currentTrack != nil { speechPlayer.play() }
-                }
+                LockScreenManager.shared.handleGlobalToggle()
             }) {
                 let anyPlaying = musicPlayer.isPlaying || speechPlayer.isPlaying
                 HStack(spacing: 6) {
@@ -276,36 +273,12 @@ struct ContentView: View {
         }
     }
     
-    private func setupGlobalAudioSession() {
+    private func setupAudioSession() {
         do {
             let session = AVAudioSession.sharedInstance()
             try session.setCategory(.playback, mode: .default)
             try session.setActive(true)
         } catch { print("Failed to setup audio session: \(error)") }
-    }
-    
-    private func setupGlobalRemoteCommands() {
-        let commandCenter = MPRemoteCommandCenter.shared()
-        commandCenter.playCommand.isEnabled = true
-        commandCenter.playCommand.addTarget { _ in
-            if musicPlayer.queue.count > 0 { musicPlayer.play() }
-            if speechPlayer.queue.count > 0 { speechPlayer.play() }
-            return .success
-        }
-        commandCenter.pauseCommand.isEnabled = true
-        commandCenter.pauseCommand.addTarget { _ in
-            musicPlayer.pause(); speechPlayer.pause()
-            return .success
-        }
-        commandCenter.togglePlayPauseCommand.isEnabled = true
-        commandCenter.togglePlayPauseCommand.addTarget { _ in
-            if musicPlayer.isPlaying || speechPlayer.isPlaying { musicPlayer.pause(); speechPlayer.pause() }
-            else {
-                if musicPlayer.queue.count > 0 { musicPlayer.play() }
-                if speechPlayer.queue.count > 0 { speechPlayer.play() }
-            }
-            return .success
-        }
     }
     
     private func warmUpManagers() {
