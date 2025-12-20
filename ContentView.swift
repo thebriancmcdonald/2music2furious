@@ -157,9 +157,19 @@ struct ContentView: View {
             
             Spacer()
             
-            // UPDATED: Now uses LockScreenManager logic for smart toggle
+            // PLAY ALL: Always starts both players
+            // PAUSE ALL: Pauses everything
             Button(action: {
-                LockScreenManager.shared.handleGlobalToggle()
+                let anyPlaying = musicPlayer.isPlaying || speechPlayer.isPlaying
+                if anyPlaying {
+                    // PAUSE ALL
+                    musicPlayer.pause()
+                    speechPlayer.pause()
+                } else {
+                    // PLAY ALL - start both if they have tracks
+                    if musicPlayer.currentTrack != nil { musicPlayer.play() }
+                    if speechPlayer.currentTrack != nil { speechPlayer.play() }
+                }
             }) {
                 let anyPlaying = musicPlayer.isPlaying || speechPlayer.isPlaying
                 HStack(spacing: 6) {
@@ -379,7 +389,7 @@ struct UpNextView: View {
                             ForEach(0..<min(2, player.queue.count), id: \.self) { i in
                                 let trackIndex = (player.currentIndex + 1 + i) % player.queue.count
                                 if player.queue.indices.contains(trackIndex) {
-                                    Text("• \(player.queue[trackIndex].title)").font(.system(size: 13, weight: .medium, design: .rounded)).foregroundStyle(.white.opacity(0.9)).lineLimit(1)
+                                    Text("â€¢ \(player.queue[trackIndex].title)").font(.system(size: 13, weight: .medium, design: .rounded)).foregroundStyle(.white.opacity(0.9)).lineLimit(1)
                                 }
                             }
                         }
