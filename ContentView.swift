@@ -286,9 +286,19 @@ struct ContentView: View {
     private func setupAudioSession() {
         do {
             let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.playback, mode: .default)
-            try session.setActive(true)
+            // Use .playback to keep audio playing in background
+            // Add .mixWithOthers to receive secondary audio hints from Siri
+            try session.setCategory(.playback, mode: .spokenAudio, options: [.allowBluetooth, .allowBluetoothA2DP])
+            try session.setActive(true, options: .notifyOthersOnDeactivation)
         } catch { print("Failed to setup audio session: \(error)") }
+        
+        // Setup interruption handling for message announcements
+        // Access .shared to initialize the singleton and its observers
+        let manager = InterruptionManager.shared
+        manager.musicPlayer = musicPlayer
+        manager.speechPlayer = speechPlayer
+        
+        print("🎧 InterruptionManager initialized")
     }
     
     private func warmUpManagers() {

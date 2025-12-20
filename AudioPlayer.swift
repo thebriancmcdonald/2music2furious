@@ -52,21 +52,31 @@ class AudioPlayer: NSObject, ObservableObject {
     private static func setCachedArtwork(_ image: UIImage, for key: String) { cacheQueue.async(flags: .barrier) { artworkCache[key] = image } }
     
     var duration: Double {
+        var result: Double = 0
         if isUsingEngine {
             guard let file = audioFile else { return 0 }
-            return Double(file.length) / file.processingFormat.sampleRate
+            let sampleRate = file.processingFormat.sampleRate
+            guard sampleRate > 0 else { return 0 }
+            result = Double(file.length) / sampleRate
         } else {
-            return avPlayer?.currentItem?.duration.seconds ?? 0
+            result = avPlayer?.currentItem?.duration.seconds ?? 0
         }
+        // Safety: Return 0 for invalid durations
+        guard result.isFinite && result >= 0 else { return 0 }
+        return result
     }
     
     var currentTime: Double {
+        var result: Double = 0
         if isUsingEngine {
-            guard isPlaying, let nodeTime = playerNode.lastRenderTime, let playerTime = playerNode.playerTime(forNodeTime: nodeTime) else { return seekOffset }
-            return seekOffset + (Double(playerTime.sampleTime) / audioSampleRate)
+            guard isPlaying, let nodeTime = playerNode.lastRenderTime, let playerTime = playerNode.playerTime(forNodeTime: nodeTime) else { return max(0, seekOffset) }
+            result = seekOffset + (Double(playerTime.sampleTime) / audioSampleRate)
         } else {
-            return avPlayer?.currentTime().seconds ?? 0
+            result = avPlayer?.currentTime().seconds ?? 0
         }
+        // Safety: Return 0 for invalid times
+        guard result.isFinite && result >= 0 else { return 0 }
+        return result
     }
     
     private let engine = AVAudioEngine()
@@ -285,12 +295,31 @@ class AudioPlayer: NSObject, ObservableObject {
     
     private func scheduleFileSegment(from startTime: Double) {
         guard let file = audioFile else { return }
-        let startFrame = AVAudioFramePosition(startTime * file.processingFormat.sampleRate)
-        let remainingFrames = AVAudioFrameCount(file.length - startFrame)
-        guard remainingFrames > 0 else { return }
+        
+        // Safety: Ensure startTime is non-negative
+        let safeStartTime = max(0, startTime)
+        
+        // Calculate start frame with bounds checking
+        let sampleRate = file.processingFormat.sampleRate
+        guard sampleRate > 0 else { return }
+        
+        let calculatedStartFrame = Int64(safeStartTime * sampleRate)
+        let fileLength = file.length
+        
+        // Safety: Ensure startFrame doesn't exceed file length
+        let startFrame = min(calculatedStartFrame, fileLength)
+        guard startFrame >= 0 else { return }
+        
+        // Safety: Calculate remaining frames, ensuring non-negative
+        let remainingFramesInt64 = fileLength - startFrame
+        guard remainingFramesInt64 > 0 else { return }
+        
+        // Safe conversion to AVAudioFrameCount (UInt32)
+        let remainingFrames = AVAudioFrameCount(min(remainingFramesInt64, Int64(UInt32.max)))
+        
         playerNode.stop()
-        playerNode.scheduleSegment(file, startingFrame: startFrame, frameCount: remainingFrames, at: nil)
-        seekOffset = startTime
+        playerNode.scheduleSegment(file, startingFrame: AVAudioFramePosition(startFrame), frameCount: remainingFrames, at: nil)
+        seekOffset = safeStartTime
         timePitchNode.rate = playbackSpeed
     }
     
@@ -650,5 +679,194 @@ class LockScreenManager {
             info[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: fallbackImage.size) { _ in fallbackImage }
         }
         UIGraphicsEndImageContext()
+    }
+}
+
+// MARK: - Audio Interruption Manager (Message Announcements)
+
+/// Handles system audio interruptions (Siri, message announcements, phone calls)
+/// Pauses speech and ducks music when system needs to speak
+class InterruptionManager {
+    static let shared = InterruptionManager()
+    
+    weak var musicPlayer: AudioPlayer?
+    weak var speechPlayer: AudioPlayer?
+    
+    // Track what was playing before interruption
+    private var musicWasPlaying = false
+    private var speechWasPlaying = false
+    private var originalMusicDucking = false
+    private var isCurrentlyInterrupted = false
+    
+    private init() {
+        setupObservers()
+    }
+    
+    private func setupObservers() {
+        // Use object: nil to catch notifications from any source
+        // This is important for Siri announcements which may not come from our session
+        
+        // Standard interruption (phone calls, alarms, etc.)
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleInterruption),
+            name: AVAudioSession.interruptionNotification,
+            object: nil  // Changed from session to nil
+        )
+        
+        // Secondary audio hint (Siri announcements, other apps' audio)
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleSecondaryAudio),
+            name: AVAudioSession.silenceSecondaryAudioHintNotification,
+            object: nil  // Changed from session to nil
+        )
+        
+        // Route changes (headphones unplugged, etc.)
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleRouteChange),
+            name: AVAudioSession.routeChangeNotification,
+            object: nil  // Changed from session to nil
+        )
+        
+        print("🔔 Audio interruption observers registered")
+    }
+    
+    // MARK: - Standard Interruption (Phone Calls, Alarms)
+    
+    @objc private func handleInterruption(_ notification: Notification) {
+        guard let userInfo = notification.userInfo,
+              let typeValue = userInfo[AVAudioSessionInterruptionTypeKey] as? UInt,
+              let type = AVAudioSession.InterruptionType(rawValue: typeValue) else {
+            return
+        }
+        
+        print("📱 Interruption notification: \(type == .began ? "BEGAN" : "ENDED")")
+        
+        switch type {
+        case .began:
+            handleInterruptionBegan(reason: "interruption")
+            
+        case .ended:
+            if let optionsValue = userInfo[AVAudioSessionInterruptionOptionKey] as? UInt {
+                let options = AVAudioSession.InterruptionOptions(rawValue: optionsValue)
+                if options.contains(.shouldResume) {
+                    handleInterruptionEnded()
+                }
+            } else {
+                handleInterruptionEnded()
+            }
+            
+        @unknown default:
+            break
+        }
+    }
+    
+    // MARK: - Secondary Audio Hint (Siri Announcements)
+    
+    @objc private func handleSecondaryAudio(_ notification: Notification) {
+        guard let userInfo = notification.userInfo,
+              let typeValue = userInfo[AVAudioSessionSilenceSecondaryAudioHintTypeKey] as? UInt,
+              let type = AVAudioSession.SilenceSecondaryAudioHintType(rawValue: typeValue) else {
+            return
+        }
+        
+        print("🔔 Secondary audio hint: \(type == .begin ? "BEGIN" : "END")")
+        
+        switch type {
+        case .begin:
+            // Another app (Siri) is playing audio
+            handleInterruptionBegan(reason: "siri")
+            
+        case .end:
+            // Other app's audio ended
+            handleInterruptionEnded()
+            
+        @unknown default:
+            break
+        }
+    }
+    
+    // MARK: - Route Change (Headphones Unplugged)
+    
+    @objc private func handleRouteChange(_ notification: Notification) {
+        guard let userInfo = notification.userInfo,
+              let reasonValue = userInfo[AVAudioSessionRouteChangeReasonKey] as? UInt,
+              let reason = AVAudioSession.RouteChangeReason(rawValue: reasonValue) else {
+            return
+        }
+        
+        // Pause when headphones are unplugged (standard behavior)
+        if reason == .oldDeviceUnavailable {
+            print("🎧 Headphones unplugged - pausing")
+            DispatchQueue.main.async {
+                self.musicPlayer?.pause()
+                self.speechPlayer?.pause()
+            }
+        }
+    }
+    
+    // MARK: - Shared Handlers
+    
+    private func handleInterruptionBegan(reason: String) {
+        guard !isCurrentlyInterrupted else { return } // Prevent double-handling
+        isCurrentlyInterrupted = true
+        
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self,
+                  let music = self.musicPlayer,
+                  let speech = self.speechPlayer else { return }
+            
+            // Save state BEFORE pausing
+            self.musicWasPlaying = music.isPlaying
+            self.speechWasPlaying = speech.isPlaying
+            self.originalMusicDucking = music.isDucking
+            
+            print("🔇 \(reason) began - music was: \(self.musicWasPlaying), speech was: \(self.speechWasPlaying)")
+            
+            // Pause speech
+            if speech.isPlaying {
+                speech.pause()
+            }
+            
+            // Pause music (system may do this anyway, but be explicit)
+            if music.isPlaying {
+                music.pause()
+            }
+        }
+    }
+    
+    private func handleInterruptionEnded() {
+        guard isCurrentlyInterrupted else { return } // Only handle if we started an interruption
+        isCurrentlyInterrupted = false
+        
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self,
+                  let music = self.musicPlayer,
+                  let speech = self.speechPlayer else { return }
+            
+            print("🔊 Interruption ended - resuming music: \(self.musicWasPlaying), speech: \(self.speechWasPlaying)")
+            
+            // Restore music ducking state
+            music.isDucking = self.originalMusicDucking
+            
+            // Small delay to let system audio fully finish
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                // Resume music if it was playing
+                if self.musicWasPlaying {
+                    music.play()
+                }
+                
+                // Resume speech if it was playing
+                if self.speechWasPlaying {
+                    speech.play()
+                }
+            }
+        }
+    }
+    
+    deinit {
+        NotificationCenter.default.removeObserver(self)
     }
 }

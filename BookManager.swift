@@ -22,7 +22,7 @@ struct LibriVoxChapter: Identifiable, Codable, Hashable {
     var duration: String { playtime }
     
     var formattedDuration: String {
-        guard let seconds = Int(playtime) else { return playtime }
+        guard let seconds = Int(playtime), seconds >= 0 else { return playtime }
         let h = seconds / 3600
         let m = (seconds % 3600) / 60
         let s = seconds % 60
@@ -178,8 +178,8 @@ class BookManager: ObservableObject {
                 let asset = AVURLAsset(url: fileURL)
                 // Use deprecated but synchronous property to avoid async/await issues
                 let duration = asset.duration.seconds
-                if !duration.isNaN && !duration.isZero {
-                    let s = Int(duration)
+                if duration.isFinite && duration > 0 {
+                    let s = max(0, Int(duration))
                     result = s >= 3600 ? String(format: "%d:%02d:%02d", s/3600, (s%3600)/60, s%60) : String(format: "%d:%02d", (s%3600)/60, s%60)
                 }
             }
