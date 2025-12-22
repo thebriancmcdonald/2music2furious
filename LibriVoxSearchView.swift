@@ -3,7 +3,7 @@
 //  2 Music 2 Furious - MILESTONE 14
 //
 //  Search, browse, and download LibriVox audiobooks
-//  FIXED: Removed artifacts and fixed Chapter initialization
+//  FIXED: Proper API query syntax with partial matching (^) and multi-word (+)
 //
 
 import SwiftUI
@@ -48,7 +48,6 @@ private struct APIBook: Codable, Identifiable, Sendable {
         if let apiSections = sections {
             for (index, section) in apiSections.enumerated() {
                 if let url = section.listen_url {
-                    // CLEAN INITIALIZER
                     let chapter = LibriVoxChapter(
                         id: UUID().uuidString,
                         title: section.title ?? "Chapter \(index + 1)",
@@ -71,10 +70,50 @@ private struct APIBook: Codable, Identifiable, Sendable {
             archiveUrl: url_iarchive
         )
     }
+    
+    /// Calculate relevance score for a search query (higher = better match)
+    func relevanceScore(for tokens: [String]) -> Int {
+        var score = 0
+        let titleLower = title.lowercased()
+        let descLower = (description ?? "").lowercased()
+        
+        // Build author string
+        var authorString = ""
+        if let authors = authors {
+            authorString = authors.map { "\($0.first_name) \($0.last_name)" }.joined(separator: " ").lowercased()
+        }
+        
+        for token in tokens {
+            // Title exact word match = highest score
+            if titleLower.contains(" \(token) ") || titleLower.hasPrefix("\(token) ") || titleLower.hasSuffix(" \(token)") || titleLower == token {
+                score += 100
+            }
+            // Title contains token
+            else if titleLower.contains(token) {
+                score += 50
+            }
+            
+            // Author exact match
+            if authorString.contains(token) {
+                score += 75
+            }
+            
+            // Description contains token (lower score)
+            if descLower.contains(token) {
+                score += 10
+            }
+        }
+        
+        return score
+    }
 }
 
 private struct APISearchResponse: Codable, Sendable {
-    let books: [APIBook]
+    let books: [APIBook]?  // Optional because API returns {} when no results
+    
+    var booksList: [APIBook] {
+        books ?? []
+    }
 }
 
 // MARK: - Public Models
@@ -112,8 +151,10 @@ class LibriVoxAPI: ObservableObject {
     
     private let baseURL = "https://librivox.org/api/feed/audiobooks"
     private var currentOffset = 0
-    private let limit = 20
+    private let browseLimit = 50       // For browsing (Popular/Recent) - API default
+    private let searchLimit = 200      // Higher limit for search to find more results
     private var lastQuery = ""
+    private var lastSearchTokens: [String] = []
     private var currentMode: FetchMode = .popular
     
     enum FetchMode { case popular, recent, search, genre }
@@ -121,6 +162,13 @@ class LibriVoxAPI: ObservableObject {
     func loadPopular() { resetAndFetch(mode: .popular) }
     func loadRecent() { resetAndFetch(mode: .recent) }
     
+    // MARK: - FIXED SEARCH IMPLEMENTATION
+    
+    /// Main search function using correct LibriVox API syntax
+    /// API Notes:
+    ///   - `^` anchors the BEGINNING of search: title=^Benjamin finds "Benjamin Franklin's..."
+    ///   - `author` searches by LAST NAME only
+    ///   - Without `^`, does partial/contains match
     func search(query: String) {
         guard !query.isEmpty else { return }
         currentMode = .search
@@ -128,24 +176,129 @@ class LibriVoxAPI: ObservableObject {
         isSearching = true
         displayBooks = []
         
+        // Parse query into lowercase tokens
+        let tokens = query.lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty && $0.count > 1 }
+        
+        lastSearchTokens = tokens
+        
+        guard !tokens.isEmpty else {
+            isSearching = false
+            return
+        }
+        
+        // Build search endpoints using correct API syntax
+        var searchEndpoints: Set<String> = []
+        
+        // === TITLE SEARCHES ===
+        
+        // 1. Full phrase contains search (no ^)
+        let fullPhrase = query.trimmingCharacters(in: .whitespaces)
+        searchEndpoints.insert("title=\(encodeForURL(fullPhrase))")
+        
+        // 2. Each individual word - contains search
+        for token in tokens {
+            searchEndpoints.insert("title=\(encodeForURL(token))")
+        }
+        
+        // 3. Anchored search - titles STARTING with first word
+        searchEndpoints.insert("title=^\(encodeForURL(tokens.first!))")
+        
+        // === AUTHOR SEARCHES ===
+        // API docs say: "author - all records by that author last name"
+        
+        // 4. Try each token as author last name
+        for token in tokens {
+            searchEndpoints.insert("author=\(encodeForURL(token))")
+        }
+        
+        // 5. Try anchored author search
+        if let lastName = tokens.last {
+            searchEndpoints.insert("author=^\(encodeForURL(lastName))")
+        }
+        
+        print("🔍 LibriVox Search: '\(query)' → \(searchEndpoints.count) API calls")
+        print("🔍 Tokens: \(tokens)")
+        
         let group = DispatchGroup()
         var combinedResults: [APIBook] = []
-        let endpoints = ["title=\(encode(query))", "author=\(encode(query))", "genre=\(encode(query))"]
+        let resultsLock = NSLock()
         
-        for params in endpoints {
+        for params in searchEndpoints {
             group.enter()
-            let url = "\(baseURL)?format=json&extended=1&limit=\(limit)&\(params)"
-            fetchRaw(url: url) { books in
-                combinedResults.append(contentsOf: books)
+            // Use higher limit for better coverage
+            let urlString = "\(baseURL)?format=json&extended=1&limit=\(searchLimit)&\(params)"
+            
+            guard let url = URL(string: urlString) else {
+                print("❌ Invalid URL: \(urlString)")
                 group.leave()
+                continue
             }
+            
+            print("📡 Fetching: \(urlString)")
+            
+            URLSession.shared.dataTask(with: url) { data, response, error in
+                defer { group.leave() }
+                
+                if let error = error {
+                    print("❌ Network error for \(params): \(error.localizedDescription)")
+                    return
+                }
+                
+                guard let data = data else {
+                    print("❌ No data for \(params)")
+                    return
+                }
+                
+                // Debug: Print raw response preview
+                if let rawString = String(data: data, encoding: .utf8) {
+                    let preview = String(rawString.prefix(300))
+                    print("📦 Response for \(params): \(preview)...")
+                }
+                
+                do {
+                    let response = try JSONDecoder().decode(APISearchResponse.self, from: data)
+                    let books = response.booksList
+                    resultsLock.lock()
+                    combinedResults.append(contentsOf: books)
+                    resultsLock.unlock()
+                    print("✅ Got \(books.count) results from \(params)")
+                } catch {
+                    print("❌ Decode error for \(params): \(error)")
+                }
+            }.resume()
         }
         
         group.notify(queue: .main) { [weak self] in
             guard let self = self else { return }
-            self.isSearching = false
-            self.displayBooks = self.deduplicate(combinedResults).map { $0.toDomain() }
+            self.processSearchResults(combinedResults, tokens: tokens)
         }
+    }
+    
+    /// Process and filter search results
+    private func processSearchResults(_ results: [APIBook], tokens: [String]) {
+        // Deduplicate by ID
+        var seen = Set<String>()
+        var uniqueBooks = results.filter { seen.insert($0.id).inserted }
+        
+        // Filter: Keep only books where at least one token appears in title, author, or description
+        let filteredBooks = uniqueBooks.filter { book in
+            let searchable = "\(book.title) \(book.authors?.map { "\($0.first_name) \($0.last_name)" }.joined(separator: " ") ?? "") \(book.description ?? "")".lowercased()
+            
+            // Require at least one token to match
+            return tokens.contains { searchable.contains($0) }
+        }
+        
+        // Sort by relevance score (higher = better match)
+        let sortedBooks = filteredBooks.sorted { book1, book2 in
+            book1.relevanceScore(for: tokens) > book2.relevanceScore(for: tokens)
+        }
+        
+        print("🎯 Search complete: \(results.count) raw → \(uniqueBooks.count) unique → \(sortedBooks.count) relevant")
+        
+        self.isSearching = false
+        self.displayBooks = sortedBooks.map { $0.toDomain() }
     }
     
     func searchGenre(genre: String) { resetAndFetch(mode: .genre, query: genre) }
@@ -153,11 +306,11 @@ class LibriVoxAPI: ObservableObject {
     func loadNextPage() {
         guard !isSearching, !isLoadingMore, currentMode != .search else { return }
         isLoadingMore = true
-        currentOffset += limit
-        var params = "limit=\(limit)&offset=\(currentOffset)"
+        currentOffset += browseLimit
+        var params = "limit=\(browseLimit)&offset=\(currentOffset)"
         switch currentMode {
         case .recent: params += "&since=2024-01-01"
-        case .genre: params += "&genre=\(encode(lastQuery))"
+        case .genre: params += "&genre=\(encodeForURL(lastQuery))"
         default: break
         }
         fetchRaw(url: "\(baseURL)?format=json&extended=1&\(params)") { [weak self] books in
@@ -174,10 +327,10 @@ class LibriVoxAPI: ObservableObject {
         currentOffset = 0
         isSearching = true
         displayBooks = []
-        var params = "limit=\(limit)&offset=0"
+        var params = "limit=\(browseLimit)&offset=0"
         switch mode {
         case .recent: params += "&since=2024-01-01"
-        case .genre: params += "&genre=\(encode(query))"
+        case .genre: params += "&genre=\(encodeForURL(query))"
         default: break
         }
         fetchRaw(url: "\(baseURL)?format=json&extended=1&\(params)") { [weak self] books in
@@ -194,20 +347,21 @@ class LibriVoxAPI: ObservableObject {
             guard let data = data else { completion([]); return }
             do {
                 let response = try JSONDecoder().decode(APISearchResponse.self, from: data)
-                completion(response.books)
+                completion(response.booksList)
             } catch {
+                print("❌ fetchRaw decode error: \(error)")
                 completion([])
             }
         }.resume()
     }
     
-    private func deduplicate(_ books: [APIBook]) -> [APIBook] {
-        var seen = Set<String>()
-        return books.filter { seen.insert($0.id).inserted }
-    }
-    
-    private func encode(_ string: String) -> String {
-        string.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
+    /// URL encode a string for query parameters
+    /// Preserves ^ which is part of LibriVox API syntax for anchored searches
+    private func encodeForURL(_ string: String) -> String {
+        // Create a custom character set that includes ^ as allowed
+        var allowed = CharacterSet.urlQueryAllowed
+        allowed.insert("^")  // Don't encode ^ - it's API syntax
+        return string.addingPercentEncoding(withAllowedCharacters: allowed) ?? ""
     }
 }
 
@@ -288,8 +442,22 @@ struct LibriVoxSearchView: View {
                     VStack(spacing: 12) {
                         Image(systemName: "books.vertical").font(.largeTitle).foregroundColor(.secondary)
                         Text("No audiobooks found").foregroundColor(.secondary)
+                        if !searchText.isEmpty {
+                            Text("Try different keywords or check spelling")
+                                .font(.caption)
+                                .foregroundColor(.secondary.opacity(0.7))
+                        }
                     }.padding(.top, 50)
                 } else {
+                    // Show result count for searches
+                    if !searchText.isEmpty {
+                        Text("\(api.displayBooks.count) results for \"\(searchText)\"")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 4)
+                    }
+                    
                     ForEach(api.displayBooks) { book in
                         NavigationLink(value: book) {
                             GlassMediaListRow(title: book.title, subtitle: book.author, artworkURL: book.coverArtUrl, artworkIcon: "book.fill", artworkColor: .orange, details: book.totalTime)
