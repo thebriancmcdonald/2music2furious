@@ -3,8 +3,8 @@
 //  2 Music 2 Furious
 //
 //  Main app view with dual audio players
-//  RESTORED: Original UI
-//  FIXED: UI Header Button now uses Smart Lock Screen Logic
+//  FIXED: Speed Fader is now a true overlay (won't shift UI)
+//  FIXED: Removed X button and reduced padding
 //
 
 import SwiftUI
@@ -120,29 +120,10 @@ struct ContentView: View {
     // MARK: - Background
     
     private var backgroundGradient: some View {
-        GeometryReader { _ in
-            LinearGradient(
-                colors: [Color(red: 0.05, green: 0.05, blue: 0.1), Color(red: 0.1, green: 0.1, blue: 0.2)],
-                startPoint: .topLeading, endPoint: .bottomTrailing
-            )
-            .overlay(
-                ZStack {
-                    if let artwork = musicPlayer.artwork ?? speechPlayer.artwork {
-                        Image(uiImage: artwork)
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                            .ignoresSafeArea()
-                            .blur(radius: 60)
-                            .opacity(0.5)
-                    } else {
-                        ZStack {
-                            Circle().fill(Color.blue.opacity(0.15)).blur(radius: 80).offset(x: -100, y: -200)
-                            Circle().fill(Color.purple.opacity(0.15)).blur(radius: 80).offset(x: 100, y: 200)
-                        }
-                    }
-                }
-            )
-        }
+        LinearGradient(
+            colors: [Color(red: 0.05, green: 0.05, blue: 0.1), Color(red: 0.1, green: 0.1, blue: 0.2)],
+            startPoint: .topLeading, endPoint: .bottomTrailing
+        )
         .ignoresSafeArea()
     }
     
@@ -157,16 +138,12 @@ struct ContentView: View {
             
             Spacer()
             
-            // PLAY ALL: Always starts both players
-            // PAUSE ALL: Pauses everything
             Button(action: {
                 let anyPlaying = musicPlayer.isPlaying || speechPlayer.isPlaying
                 if anyPlaying {
-                    // PAUSE ALL
                     musicPlayer.pause()
                     speechPlayer.pause()
                 } else {
-                    // PLAY ALL - start both if they have tracks
                     if musicPlayer.currentTrack != nil { musicPlayer.play() }
                     if speechPlayer.currentTrack != nil { speechPlayer.play() }
                 }
@@ -211,6 +188,7 @@ struct ContentView: View {
                 }
                 Spacer()
                 TrackInfoView(player: musicPlayer)
+                    .zIndex(100) // Ensure popup floats over subsequent views
                 Spacer()
                 SeekBarView(player: musicPlayer)
                 Spacer()
@@ -226,7 +204,9 @@ struct ContentView: View {
             }
             VerticalVolumeView(player: musicPlayer)
         }
-        .padding(16).background(panelBackground(for: musicPlayer)).glassPanel()
+        .padding(16)
+        .background(panelBackground(for: musicPlayer))
+        .glassPanel()
     }
     
     // MARK: - Speech Panel
@@ -253,6 +233,7 @@ struct ContentView: View {
                 }
                 Spacer()
                 TrackInfoView(player: speechPlayer)
+                    .zIndex(100) // Ensure popup floats over subsequent views
                 Spacer()
                 SeekBarView(player: speechPlayer)
                 Spacer()
@@ -269,31 +250,33 @@ struct ContentView: View {
             }
             VerticalVolumeView(player: speechPlayer)
         }
-        .padding(16).background(panelBackground(for: speechPlayer)).glassPanel()
+        .padding(16)
+        .background(panelBackground(for: speechPlayer))
+        .glassPanel()
     }
     
     @ViewBuilder
     private func panelBackground(for player: AudioPlayer) -> some View {
         if let artwork = player.artwork {
             GeometryReader { geo in
-                Image(uiImage: artwork).resizable().aspectRatio(contentMode: .fill)
+                Image(uiImage: artwork)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
                     .frame(width: geo.size.width, height: geo.size.height)
-                    .blur(radius: 40).overlay(Color.black.opacity(0.5))
-            }.clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+                    .blur(radius: 25)
+                    .overlay(Color.black.opacity(0.5))
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
         }
     }
     
     private func setupAudioSession() {
         do {
             let session = AVAudioSession.sharedInstance()
-            // Use .playback to keep audio playing in background
-            // Add .mixWithOthers to receive secondary audio hints from Siri
             try session.setCategory(.playback, mode: .spokenAudio, options: [.allowBluetooth, .allowBluetoothA2DP])
             try session.setActive(true, options: .notifyOthersOnDeactivation)
         } catch { print("Failed to setup audio session: \(error)") }
         
-        // Setup interruption handling for message announcements
-        // Access .shared to initialize the singleton and its observers
         let manager = InterruptionManager.shared
         manager.musicPlayer = musicPlayer
         manager.speechPlayer = speechPlayer
@@ -324,26 +307,166 @@ struct ContentView: View {
 
 struct TrackInfoView: View {
     @ObservedObject var player: AudioPlayer
+    
+    @State private var isSliderVisible = false
+    @State private var inactivityTimer: Timer?
+    
+    var isActive: Bool {
+        player.playbackSpeed != 1.0
+    }
+    
     var body: some View {
         HStack(alignment: .center) {
+            // Artwork
             if let artwork = player.artwork {
-                Image(uiImage: artwork).resizable().aspectRatio(contentMode: .fill)
-                    .frame(width: 40, height: 40).clipShape(RoundedRectangle(cornerRadius: 6)).padding(.trailing, 4)
+                Image(uiImage: artwork)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: 40, height: 40)
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .padding(.trailing, 4)
+                    .shadow(radius: 2)
             }
+            
             VStack(alignment: .leading, spacing: 2) {
-                Text(player.currentTrack?.title ?? "Select Audio").font(.system(size: 16, weight: .bold, design: .rounded)).foregroundColor(.white).lineLimit(1)
-                Text(player.currentTrack?.artist ?? "No track loaded").font(.system(size: 13, weight: .medium, design: .rounded)).foregroundColor(.white.opacity(0.7)).lineLimit(1)
+                Text(player.currentTrack?.title ?? "Select Audio")
+                    .font(.system(size: 16, weight: .bold, design: .rounded))
+                    .foregroundColor(.white)
+                    .lineLimit(1)
+                Text(player.currentTrack?.artist ?? "No track loaded")
+                    .font(.system(size: 13, weight: .medium, design: .rounded))
+                    .foregroundColor(.white.opacity(0.7))
+                    .lineLimit(1)
             }
+            
             Spacer()
-            Button(action: { player.cycleSpeed() }) {
-                Text("\(String(format: "%.1f", player.playbackSpeed))x")
-                    .font(.system(size: 12, weight: .bold, design: .monospaced))
-                    .foregroundColor(player.playbackSpeed == 1.0 ? .white.opacity(0.5) : .green)
-                    .padding(.horizontal, 8).padding(.vertical, 4)
-                    .background(Capsule().fill(player.playbackSpeed == 1.0 ? Color.white.opacity(0.1) : Color.white.opacity(0.2)))
-                    .overlay(Capsule().stroke(player.playbackSpeed == 1.0 ? Color.clear : Color.green.opacity(0.5), lineWidth: 1))
-            }
+            
+            // Speed Button + Overlay Slider
+            // The overlay is applied to the Text view so it doesn't affect surrounding layout
+            Text(String(format: "%.1fx", player.playbackSpeed))
+                .font(.system(size: 12, weight: .bold, design: .monospaced))
+                .foregroundColor(isActive ? .green : .white.opacity(0.5))
+                .padding(.horizontal, 8).padding(.vertical, 4)
+                .background(Capsule().fill(isActive ? Color.green.opacity(0.15) : Color.white.opacity(0.1)))
+                .overlay(Capsule().stroke(isActive ? Color.green.opacity(0.5) : Color.white.opacity(0.1), lineWidth: 1))
+                .contentShape(Rectangle())
+                // OVERLAY SLIDER: Renders outside the bounds without pushing neighbors
+                .overlay(
+                    Group {
+                        if isSliderVisible {
+                            VerticalSpeedSlider(player: player, onInteraction: resetInactivityTimer)
+                                // Positioning: Top aligned with button, shifted down slightly
+                                .offset(x: 0, y: 10)
+                                .transition(.scale(scale: 0.8, anchor: .top).combined(with: .opacity))
+                        }
+                    },
+                    alignment: .topTrailing
+                )
+                // Z-INDEX: Ensures the slider renders ON TOP of the Seek Bar below it
+                .zIndex(100)
+                .onTapGesture {
+                    if isSliderVisible {
+                        withAnimation { isSliderVisible = false }
+                    } else {
+                        player.cycleSpeed()
+                    }
+                }
+                .onLongPressGesture(minimumDuration: 0.3) {
+                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                        isSliderVisible = true
+                    }
+                    resetInactivityTimer()
+                }
+            
         }.padding(.horizontal, 4)
+    }
+    
+    private func resetInactivityTimer() {
+        inactivityTimer?.invalidate()
+        inactivityTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { _ in
+            withAnimation(.easeOut(duration: 0.2)) {
+                isSliderVisible = false
+            }
+        }
+    }
+}
+
+// MARK: - Vertical Speed Slider (Streamlined)
+
+struct VerticalSpeedSlider: View {
+    @ObservedObject var player: AudioPlayer
+    var onInteraction: () -> Void
+    
+    let minSpeed: Double = 0.5
+    let maxSpeed: Double = 3.0
+    
+    var body: some View {
+        VStack(spacing: 8) {
+            // Header: Large Value (No X Button)
+            Text(String(format: "%.1fx", player.playbackSpeed))
+                .font(.system(size: 24, weight: .bold, design: .rounded))
+                .foregroundColor(.white)
+                .frame(maxWidth: .infinity)
+                .padding(.top, 4)
+            
+            // Vertical Slider
+            GeometryReader { geo in
+                let height = geo.size.height
+                let progress = CGFloat((Double(player.playbackSpeed) - minSpeed) / (maxSpeed - minSpeed))
+                
+                ZStack(alignment: .bottom) {
+                    // Track
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(Color.black.opacity(0.3))
+                        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.1), lineWidth: 1))
+                    
+                    // Fill
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(LinearGradient(colors: [.green, .mint], startPoint: .bottom, endPoint: .top))
+                        .frame(height: max(0, min(height, height * progress)))
+                }
+                .contentShape(Rectangle())
+                .gesture(
+                    DragGesture(minimumDistance: 0)
+                        .onChanged { value in
+                            onInteraction()
+                            let dragPercent = 1.0 - (value.location.y / height)
+                            let newSpeed = minSpeed + (maxSpeed - minSpeed) * Double(dragPercent)
+                            
+                            if abs(newSpeed - 1.0) < 0.1 {
+                                player.playbackSpeed = 1.0
+                            } else {
+                                player.playbackSpeed = Float(min(max(minSpeed, newSpeed), maxSpeed))
+                            }
+                        }
+                        .onEnded { _ in onInteraction() }
+                )
+            }
+            .frame(height: 140) // Tall enough for thumb
+            
+            // Reset Button
+            Button(action: {
+                withAnimation { player.playbackSpeed = 1.0 }
+                onInteraction()
+            }) {
+                Text("RESET")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundColor(.white.opacity(0.8))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(Capsule().fill(Color.white.opacity(0.2)))
+            }
+        }
+        .padding(10) // Reduced padding
+        .background(.ultraThinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .stroke(Color.white.opacity(0.2), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.5), radius: 15, x: 0, y: 10)
+        .frame(width: 80) // Slimmer width
     }
 }
 
@@ -399,7 +522,7 @@ struct UpNextView: View {
                             ForEach(0..<min(2, player.queue.count), id: \.self) { i in
                                 let trackIndex = (player.currentIndex + 1 + i) % player.queue.count
                                 if player.queue.indices.contains(trackIndex) {
-                                    Text("â€¢ \(player.queue[trackIndex].title)").font(.system(size: 13, weight: .medium, design: .rounded)).foregroundStyle(.white.opacity(0.9)).lineLimit(1)
+                                    Text("• \(player.queue[trackIndex].title)").font(.system(size: 13, weight: .medium, design: .rounded)).foregroundStyle(.white.opacity(0.9)).lineLimit(1)
                                 }
                             }
                         }

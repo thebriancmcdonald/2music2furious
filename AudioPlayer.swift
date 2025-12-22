@@ -2,8 +2,8 @@
 //  AudioPlayer.swift
 //  2 Music 2 Furious
 //
-//  UPDATED: Smart Resume Logic & Custom Logo Support
-//  FIXED: Lock screen metadata formatting and resume memory
+//  UPDATED: Uses ImageCache for reliable Audiobook covers
+//  FIXED: Artwork logic now uses caching layer instead of raw URLSession
 //
 
 import Foundation
@@ -127,13 +127,20 @@ class AudioPlayer: NSObject, ObservableObject {
         }
     }
     
+    // UPDATED: Use ImageCache here
     func setExternalArtwork(from url: URL?) {
         self.currentExternalArtworkURL = url
-        guard let url = url else { return }
-        URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
-            guard let data = data, let image = UIImage(data: data) else { return }
-            DispatchQueue.main.async { self?.artwork = image }
-        }.resume()
+        guard let url = url else {
+            self.artwork = nil
+            return
+        }
+        
+        // Try ImageCache first (fast/cached)
+        ImageCache.shared.image(for: url) { [weak self] image in
+            DispatchQueue.main.async {
+                self?.artwork = image
+            }
+        }
     }
     
     private func extractArtwork(from asset: AVURLAsset) {
@@ -224,7 +231,7 @@ class AudioPlayer: NSObject, ObservableObject {
     func playNow(_ track: Track, artworkURL: URL? = nil) {
         saveCurrentPosition()
         pause()
-        self.currentExternalArtworkURL = artworkURL
+        setExternalArtwork(from: artworkURL)
         queue.insert(track, at: 0)
         currentIndex = 0
         loadTrackAndPlay(at: 0)
@@ -527,7 +534,7 @@ class LockScreenManager {
         let speechLoaded = speech.currentTrack != nil
         
         // Track when something STARTS playing (for in-app controls)
-        // Only SET flags, never clear them - clearing happens implicitly when 
+        // Only SET flags, never clear them - clearing happens implicitly when
         // handleGlobalToggle captures the current state before pausing
         if musicPlaying { musicWasPlaying = true }
         if speechPlaying { speechWasPlaying = true }

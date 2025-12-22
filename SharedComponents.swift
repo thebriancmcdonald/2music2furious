@@ -3,7 +3,7 @@
 //  2 Music 2 Furious - MILESTONE 13
 //
 //  Unified Glass UI Components
-//  ADDED: GlassEpisodeRow for consistent "Played" tracking across Podcasts & Audiobooks
+//  FIXED: glassPanel and glassCard no longer clip their content, allowing popups to overflow.
 //
 
 import SwiftUI
@@ -564,18 +564,38 @@ struct GlassPlayButton: View {
     }
 }
 
+// MARK: - KEY FIX: Non-clipping Glass Modifiers
+// We apply the clip shape ONLY to the background, not to the View itself ("self").
+// This allows overlay content (like our slider) to render outside the bounds.
+
 extension View {
     func glassPanel(cornerRadius: CGFloat = 24) -> some View {
-        self.background(.ultraThinMaterial)
-            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous).stroke(.white.opacity(0.15), lineWidth: 1))
+        self
+            .background(
+                Rectangle()
+                    .fill(.ultraThinMaterial)
+                    .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .stroke(.white.opacity(0.15), lineWidth: 1)
+            )
             .shadow(color: .black.opacity(0.2), radius: 20, x: 0, y: 10)
     }
+
     func glassCard(cornerRadius: CGFloat = 16) -> some View {
-        self.background(.ultraThinMaterial).cornerRadius(cornerRadius)
-            .overlay(RoundedRectangle(cornerRadius: cornerRadius).stroke(Color.white.opacity(0.2), lineWidth: 1))
+        self
+            .background(
+                Rectangle()
+                    .fill(.ultraThinMaterial)
+                    .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: cornerRadius).stroke(Color.white.opacity(0.2), lineWidth: 1)
+            )
             .shadow(color: Color.black.opacity(0.05), radius: 5, x: 0, y: 2)
     }
+
     func glassListRow() -> some View {
         self.listRowBackground(Color.clear).listRowSeparator(.hidden).listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
     }
