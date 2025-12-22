@@ -4,6 +4,7 @@
 //
 //  Radio search with filters - Uses SharedComponents for consistency
 //  UPDATED: Passes Station Artwork to AudioPlayer for Background Blur
+//  UPDATED: Added Drag-to-Reorder for Favorites
 //
 
 import SwiftUI
@@ -386,22 +387,32 @@ struct RadioFavoritesDestination: View {
                         .foregroundColor(.secondary)
                 }
             } else {
-                ScrollView {
-                    LazyVStack(spacing: 12) {
-                        ForEach(radioAPI.favoriteStations) { station in
-                            GlassStationRow(station: station, radioAPI: radioAPI)
-                                .onTapGesture {
-                                    // UPDATED: Now passes favicon for artwork background
-                                    musicPlayer.addRadioStream(name: station.displayName, streamURL: station.url, artworkURL: station.favicon)
-                                    dismiss()
-                                }
-                        }
+                List {
+                    ForEach(radioAPI.favoriteStations) { station in
+                        GlassStationRow(station: station, radioAPI: radioAPI)
+                            .onTapGesture {
+                                // UPDATED: Now passes favicon for artwork background
+                                musicPlayer.addRadioStream(name: station.displayName, streamURL: station.url, artworkURL: station.favicon)
+                                dismiss()
+                            }
+                            .listRowBackground(Color.clear)
+                            .listRowSeparator(.hidden)
+                            .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
                     }
-                    .padding()
+                    .onMove(perform: moveFavorites) // Drag to reorder
                 }
+                .listStyle(.plain)
+                .scrollContentBackground(.hidden)
             }
         }
         .navigationTitle("Favorites")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            EditButton() // Enables Drag/Drop mode
+        }
+    }
+    
+    private func moveFavorites(from source: IndexSet, to destination: Int) {
+        radioAPI.favoriteStations.move(fromOffsets: source, toOffset: destination)
     }
 }

@@ -4,6 +4,7 @@
 //
 //  Podcast search and download
 //  UPDATED: Uses shared GlassEpisodeRow for standardized "Played" tracking
+//  UPDATED: Added Drag-to-Reorder for Favorites
 //
 
 import SwiftUI
@@ -393,7 +394,7 @@ struct PodcastSearchDestination: View {
     }
 }
 
-// MARK: - Favorites Destination
+// MARK: - Favorites Destination (With Drag Reorder)
 
 struct FavoritesDestination: View {
     @ObservedObject var searchManager: PodcastSearchManager
@@ -408,22 +409,36 @@ struct FavoritesDestination: View {
             if searchManager.favoritePodcasts.isEmpty {
                 VStack { Spacer(); Text("No favorites yet").foregroundColor(.gray); Spacer() }
             } else {
-                ScrollView {
-                    LazyVStack(spacing: 12) {
-                        ForEach(searchManager.favoritePodcasts) { podcast in
-                            GlassMediaListRow(
-                                title: podcast.title, subtitle: podcast.author,
-                                artworkURL: URL(string: podcast.artworkUrl), artworkIcon: "mic.fill", artworkColor: .royalPurple,
-                                isFavorite: searchManager.isFavorite(podcast), onFavoriteToggle: { searchManager.toggleFavorite(podcast) }
-                            ).onTapGesture {
-                                searchManager.loadEpisodes(for: podcast)
-                                navigationPath.append(PodcastNavDestination.podcastDetail(podcast))
-                            }
+                List {
+                    ForEach(searchManager.favoritePodcasts) { podcast in
+                        GlassMediaListRow(
+                            title: podcast.title, subtitle: podcast.author,
+                            artworkURL: URL(string: podcast.artworkUrl), artworkIcon: "mic.fill", artworkColor: .royalPurple,
+                            isFavorite: searchManager.isFavorite(podcast), onFavoriteToggle: { searchManager.toggleFavorite(podcast) }
+                        )
+                        .onTapGesture {
+                            searchManager.loadEpisodes(for: podcast)
+                            navigationPath.append(PodcastNavDestination.podcastDetail(podcast))
                         }
-                    }.padding()
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                        .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+                    }
+                    .onMove(perform: moveFavorites)
                 }
+                .listStyle(.plain)
+                .scrollContentBackground(.hidden)
             }
-        }.navigationTitle("Favorites").navigationBarTitleDisplayMode(.inline)
+        }
+        .navigationTitle("Favorites")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            EditButton()
+        }
+    }
+    
+    private func moveFavorites(from source: IndexSet, to destination: Int) {
+        searchManager.favoritePodcasts.move(fromOffsets: source, toOffset: destination)
     }
 }
 

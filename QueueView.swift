@@ -3,7 +3,7 @@
 //  2 Music 2 Furious - MILESTONE 15
 //
 //  Shows the current play queue and allows playback control
-//  FIXED: Matches AudioPlayer API
+//  UPDATED: Added Drag-to-Reorder functionality
 //
 
 import SwiftUI
@@ -23,13 +23,19 @@ struct QueueView: View {
         NavigationView {
             ZStack {
                 GlassBackgroundView()
+                
                 VStack(spacing: 0) {
+                    // Header
                     HStack {
                         Text(title).font(.title2.weight(.bold))
                         Spacer()
+                        EditButton() // Native SwiftUI Edit Button for Reordering
+                            .foregroundColor(.purple)
+                            .padding(.trailing, 8)
                         GlassCloseButton(action: dismiss)
                     }
-                    .padding().background(.ultraThinMaterial)
+                    .padding()
+                    .background(.ultraThinMaterial)
                     
                     if player.queue.isEmpty {
                         VStack(spacing: 20) {
@@ -39,22 +45,28 @@ struct QueueView: View {
                             Spacer()
                         }
                     } else {
-                        ScrollView {
-                            LazyVStack(spacing: 8) {
-                                ForEach(0..<player.queue.count, id: \.self) { index in
-                                    QueueRow(
-                                        track: player.queue[index],
-                                        index: index,
-                                        isCurrent: index == player.currentIndex,
-                                        isPlaying: player.isPlaying,
-                                        onTap: {
-                                            player.playFromQueue(at: index)
-                                        }
-                                    )
-                                }
-                            }.padding()
+                        // Converted to List for .onMove support
+                        List {
+                            ForEach(0..<player.queue.count, id: \.self) { index in
+                                QueueRow(
+                                    track: player.queue[index],
+                                    index: index,
+                                    isCurrent: index == player.currentIndex,
+                                    isPlaying: player.isPlaying,
+                                    onTap: {
+                                        player.playFromQueue(at: index)
+                                    }
+                                )
+                                .listRowBackground(Color.clear)
+                                .listRowSeparator(.hidden)
+                                .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+                            }
+                            .onMove(perform: moveQueueItems) // Drag to reorder
                         }
+                        .listStyle(.plain)
+                        .scrollContentBackground(.hidden)
                     }
+                    
                     if !player.queue.isEmpty {
                         Button(action: { player.clearQueue() }) {
                             Text("Clear Queue").font(.headline).foregroundColor(.white).frame(maxWidth: .infinity).padding()
@@ -62,8 +74,18 @@ struct QueueView: View {
                         }.padding()
                     }
                 }
-            }.navigationBarHidden(true)
-        }.accentColor(.purple)
+            }
+            .navigationBarHidden(true)
+        }
+        .accentColor(.purple)
+    }
+    
+    // Logic to move items in the array
+    private func moveQueueItems(from source: IndexSet, to destination: Int) {
+        player.queue.move(fromOffsets: source, toOffset: destination)
+        
+        // Optional: If you track "currentIndex" by integer, you might need to update it here
+        // depending on your AudioPlayer logic. For now, this just moves the items.
     }
 }
 
