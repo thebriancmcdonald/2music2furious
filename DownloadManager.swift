@@ -1,13 +1,28 @@
 //
 //  DownloadManager.swift
-//  2 Music 2 Furious - MILESTONE 5
+//  2 Music 2 Furious - MILESTONE 15
 //
 //  Manages podcast episode downloads
 //  PERFORMANCE UPDATE: Lazy loading for downloaded episodes list
+//  NEW: Stores episode metadata (description, duration, etc.) alongside downloads
 //
 
 import Foundation
 import Combine
+
+// MARK: - Episode Metadata for Storage
+
+struct DownloadedEpisodeMetadata: Codable {
+    let filename: String
+    let episodeTitle: String
+    let episodeDescription: String
+    let episodeDuration: TimeInterval
+    let episodePubDate: Date
+    let episodeAudioUrl: String
+    let podcastTitle: String
+    let podcastAuthor: String
+    let podcastArtworkUrl: String
+}
 
 class DownloadManager: ObservableObject {
     
@@ -16,6 +31,9 @@ class DownloadManager: ObservableObject {
     @Published var downloads: [String: Double] = [:] // episodeId -> progress (0-1)
     @Published var downloadedEpisodes: [String] = [] // Array of filenames
     @Published var isLoaded = false
+    
+    // NEW: Metadata storage
+    private var episodeMetadata: [String: DownloadedEpisodeMetadata] = [:] // filename -> metadata
     
     private var activeTasks: [String: URLSessionDownloadTask] = [:]
     
@@ -29,12 +47,13 @@ class DownloadManager: ObservableObject {
     func loadIfNeeded() {
         guard !isLoaded else { return }
         loadDownloadedEpisodes()
+        loadMetadata()
         isLoaded = true
     }
     
     // MARK: - Download Episode
     
-    func downloadEpisode(_ episode: Episode, podcastTitle: String) {
+    func downloadEpisode(_ episode: Episode, podcastTitle: String, podcastAuthor: String = "", podcastArtworkUrl: String = "") {
         loadIfNeeded()
         
         let episodeId = episode.id.uuidString
@@ -54,6 +73,19 @@ class DownloadManager: ObservableObject {
             print("Episode already downloaded")
             return
         }
+        
+        // Store metadata BEFORE download completes (so it's ready when needed)
+        let metadata = DownloadedEpisodeMetadata(
+            filename: filename,
+            episodeTitle: episode.title,
+            episodeDescription: episode.description,
+            episodeDuration: episode.duration,
+            episodePubDate: episode.pubDate,
+            episodeAudioUrl: episode.audioUrl,
+            podcastTitle: podcastTitle,
+            podcastAuthor: podcastAuthor,
+            podcastArtworkUrl: podcastArtworkUrl
+        )
         
         // Start download
         downloads[episodeId] = 0.0
@@ -84,6 +116,10 @@ class DownloadManager: ObservableObject {
                     self?.downloadedEpisodes.append(filename)
                     self?.saveDownloadedEpisodes()
                     
+                    // Save metadata
+                    self?.episodeMetadata[filename] = metadata
+                    self?.saveMetadata()
+                    
                     print("Downloaded: \(filename)")
                 } catch {
                     print("Failed to save file: \(error)")
@@ -95,6 +131,13 @@ class DownloadManager: ObservableObject {
         task.resume()
         
         print("Started download: \(filename)")
+    }
+    
+    // MARK: - Get Metadata
+    
+    func getMetadata(for filename: String) -> DownloadedEpisodeMetadata? {
+        loadIfNeeded()
+        return episodeMetadata[filename]
     }
     
     // MARK: - Check Download Status
@@ -120,6 +163,11 @@ class DownloadManager: ObservableObject {
             try FileManager.default.removeItem(at: fileURL)
             downloadedEpisodes.removeAll { $0 == filename }
             saveDownloadedEpisodes()
+            
+            // Remove metadata
+            episodeMetadata.removeValue(forKey: filename)
+            saveMetadata()
+            
             print("Deleted: \(filename)")
         } catch {
             print("Failed to delete: \(error)")
@@ -134,6 +182,19 @@ class DownloadManager: ObservableObject {
     
     private func loadDownloadedEpisodes() {
         downloadedEpisodes = UserDefaults.standard.stringArray(forKey: "downloadedEpisodes") ?? []
+    }
+    
+    private func saveMetadata() {
+        if let encoded = try? JSONEncoder().encode(episodeMetadata) {
+            UserDefaults.standard.set(encoded, forKey: "downloadedEpisodeMetadata")
+        }
+    }
+    
+    private func loadMetadata() {
+        if let data = UserDefaults.standard.data(forKey: "downloadedEpisodeMetadata"),
+           let decoded = try? JSONDecoder().decode([String: DownloadedEpisodeMetadata].self, from: data) {
+            episodeMetadata = decoded
+        }
     }
     
     // MARK: - Helpers

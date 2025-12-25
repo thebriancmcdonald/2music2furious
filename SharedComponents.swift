@@ -1,9 +1,10 @@
 //
 //  SharedComponents.swift
-//  2 Music 2 Furious - MILESTONE 13
+//  2 Music 2 Furious - MILESTONE 15
 //
 //  Unified Glass UI Components
 //  FIXED: glassPanel and glassCard no longer clip their content, allowing popups to overflow.
+//  NEW: GlassEpisodeRow now has optional info button for episode details
 //
 
 import SwiftUI
@@ -211,23 +212,27 @@ struct MediaDetailHeader: View {
                 url: artworkURL, data: artworkData, size: 100,
                 cornerRadius: 20, fallbackIcon: artworkIcon, fallbackColor: artworkColor
             )
-            VStack(alignment: .leading, spacing: 8) {
-                Text(title).font(.title3.weight(.bold)).fixedSize(horizontal: false, vertical: true)
-                Text(subtitle).font(.subheadline).foregroundColor(.secondary)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title).font(.headline).lineLimit(3)
+                Text(subtitle).font(.subheadline).foregroundColor(.secondary).lineLimit(2)
                 if let tertiary = tertiaryText {
-                    Text(tertiary).font(.caption).foregroundColor(.secondary)
+                    Text(tertiary).font(.caption).foregroundColor(.secondary.opacity(0.8)).lineLimit(1).padding(.top, 2)
+                }
+                if let isFav = isFavorite, let toggle = onFavoriteToggle {
+                    Button(action: toggle) {
+                        HStack(spacing: 4) {
+                            Image(systemName: isFav ? "heart.fill" : "heart").font(.system(size: 14))
+                            Text(isFav ? "Favorited" : "Add to Favorites").font(.caption.weight(.medium))
+                        }
+                        .foregroundColor(isFav ? .pink : .secondary)
+                        .padding(.top, 6)
+                        .frame(height: 44, alignment: .top)
+                        .contentShape(Rectangle())
+                    }
                 }
             }
-            Spacer()
-            if let onFavorite = onFavoriteToggle, let isFav = isFavorite {
-                Button(action: onFavorite) {
-                    Image(systemName: isFav ? "star.fill" : "star")
-                        .font(.system(size: 24)).foregroundColor(.orange)
-                        .frame(width: 44, height: 44).contentShape(Rectangle())
-                }
-            }
+            Spacer(minLength: 0)
         }
-        .padding().background(.ultraThinMaterial).cornerRadius(24)
     }
 }
 
@@ -237,30 +242,27 @@ struct GlassActionButton: View {
     let title: String
     var icon: String? = nil
     var isLoading: Bool = false
-    var loadingText: String = "Loading..."
+    var loadingText: String? = nil
     var color: Color = .royalPurple
     var isDisabled: Bool = false
     let action: () -> Void
     
     var body: some View {
         Button(action: action) {
-            HStack {
+            HStack(spacing: 10) {
                 if isLoading {
-                    ProgressView().progressViewStyle(CircularProgressViewStyle(tint: .white))
-                    Text(loadingText)
+                    ProgressView().scaleEffect(0.8).tint(.white)
+                    if let text = loadingText { Text(text).font(.system(size: 16, weight: .semibold)) }
                 } else {
-                    if let icon = icon { Image(systemName: icon) }
-                    Text(title)
+                    if let icon = icon { Image(systemName: icon).font(.system(size: 16, weight: .semibold)) }
+                    Text(title).font(.system(size: 16, weight: .semibold))
                 }
             }
-            .font(.system(size: 16, weight: .semibold))
-            .foregroundColor(isLoading || isDisabled ? .white.opacity(0.7) : .white)
-            .frame(maxWidth: .infinity).padding(.vertical, 16)
-            .background(isLoading || isDisabled ? Color.secondary.opacity(0.3) : color)
-            .cornerRadius(16)
-            .shadow(color: (isLoading || isDisabled) ? Color.clear : color.opacity(0.3), radius: 10, x: 0, y: 5)
+            .foregroundColor(.white).frame(maxWidth: .infinity).frame(height: 50)
+            .background(isDisabled ? Color.gray : color).cornerRadius(14)
+            .shadow(color: (isDisabled ? Color.gray : color).opacity(0.3), radius: 8, x: 0, y: 4)
         }
-        .disabled(isLoading || isDisabled).opacity(isLoading || isDisabled ? 0.7 : 1.0)
+        .disabled(isLoading || isDisabled)
     }
 }
 
@@ -269,53 +271,56 @@ struct GlassActionButton: View {
 struct GlassMediaListRow: View {
     let title: String
     let subtitle: String
-    var artworkURL: URL?
+    var artworkURL: URL? = nil
+    var artworkData: Data? = nil
     var artworkIcon: String = "music.note"
     var artworkColor: Color = .royalPurple
     var details: String? = nil
-    var rightIcon: String? = "chevron.right"
     var isFavorite: Bool? = nil
     var onFavoriteToggle: (() -> Void)? = nil
     
     var body: some View {
         HStack(spacing: 12) {
             MediaArtworkView(
-                url: artworkURL, size: 56, cornerRadius: 12,
-                fallbackIcon: artworkIcon, fallbackColor: artworkColor
+                url: artworkURL, data: artworkData, size: 56,
+                cornerRadius: 12, fallbackIcon: artworkIcon, fallbackColor: artworkColor
             )
-            VStack(alignment: .leading, spacing: 4) {
-                Text(title).font(.system(size: 16, weight: .semibold)).foregroundColor(.primary).lineLimit(1)
-                Text(subtitle).font(.system(size: 14)).foregroundColor(.secondary).lineLimit(1)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.system(size: 15, weight: .medium)).lineLimit(1)
+                Text(subtitle).font(.caption).foregroundColor(.secondary).lineLimit(1)
                 if let details = details {
-                    Text(details).font(.caption).foregroundColor(.secondary)
+                    Text(details).font(.caption2).foregroundColor(.secondary.opacity(0.7)).lineLimit(1)
                 }
             }
             Spacer()
-            if let onFavorite = onFavoriteToggle, let isFav = isFavorite {
-                Button(action: onFavorite) {
-                    Image(systemName: isFav ? "star.fill" : "star")
-                        .foregroundColor(.orange).font(.system(size: 20))
-                        .frame(width: 44, height: 44).contentShape(Rectangle())
-                }.buttonStyle(BorderlessButtonStyle())
-            } else if let rightIcon = rightIcon {
-                Image(systemName: rightIcon)
-                    .foregroundColor(.secondary.opacity(0.5)).font(.system(size: 14, weight: .semibold))
+            if let isFav = isFavorite, let toggle = onFavoriteToggle {
+                Button(action: toggle) {
+                    Image(systemName: isFav ? "heart.fill" : "heart")
+                        .foregroundColor(isFav ? .pink : .secondary)
+                        .font(.system(size: 18))
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(BorderlessButtonStyle())
             }
         }
-        .padding(12).glassCard(cornerRadius: 16)
+        .padding(12)
+        .background(.ultraThinMaterial)
+        .cornerRadius(16)
+        .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.white.opacity(0.15), lineWidth: 1))
     }
 }
 
-// MARK: - Glass Download Row (Simple)
+// MARK: - Glass Download Row (LibriVox Chapters)
 
 struct GlassDownloadRow: View {
     var index: Int? = nil
     let title: String
-    let subtitle: String
-    var isDownloaded: Bool
-    var isDownloading: Bool
+    var subtitle: String? = nil
+    let isDownloaded: Bool
+    let isDownloading: Bool
     var color: Color = .royalPurple
-    var onDownload: () -> Void
+    let onDownload: () -> Void
     var onPlay: (() -> Void)? = nil
     
     var body: some View {
@@ -324,12 +329,15 @@ struct GlassDownloadRow: View {
             if isDownloaded { onPlay?() } else { onDownload() }
         }) {
             HStack(spacing: 12) {
-                if let index = index {
-                    Text("\(index)").font(.system(size: 14, weight: .bold)).foregroundColor(.secondary).frame(width: 30)
+                if let idx = index {
+                    Text("\(idx)").font(.system(size: 14, weight: .bold, design: .rounded))
+                        .foregroundColor(.secondary).frame(width: 28)
                 }
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(title).font(.system(size: 15, weight: .medium)).foregroundColor(.primary).lineLimit(1).multilineTextAlignment(.leading)
-                    Text(subtitle).font(.caption).foregroundColor(.secondary)
+                    Text(title).font(.system(size: 15, weight: .medium)).foregroundColor(.primary).lineLimit(1)
+                    if let sub = subtitle {
+                        Text(sub).font(.caption).foregroundColor(.secondary)
+                    }
                 }
                 Spacer()
                 if isDownloaded {
@@ -355,6 +363,7 @@ struct GlassDownloadRow: View {
 
 // MARK: - Glass Episode Row (Advanced - For Podcasts/Audiobooks)
 // Handles "Played" dimming logic
+// NEW: Optional info button for viewing episode details
 
 struct GlassEpisodeRow: View {
     let title: String
@@ -365,6 +374,7 @@ struct GlassEpisodeRow: View {
     var downloadColor: Color = .royalPurple
     let onDownload: () -> Void
     let onPlay: (() -> Void)?
+    var onInfo: (() -> Void)? = nil  // NEW: Optional info button callback
     
     var body: some View {
         Button(action: {
@@ -376,7 +386,7 @@ struct GlassEpisodeRow: View {
                     // Title: Dims if played
                     Text(title)
                         .font(.system(size: 15, weight: .medium))
-                        .foregroundColor(isPlayed ? .secondary : .primary) // DIM TITLE ONLY
+                        .foregroundColor(isPlayed ? .secondary : .primary)
                         .lineLimit(1)
                         .multilineTextAlignment(.leading)
                     
@@ -391,9 +401,26 @@ struct GlassEpisodeRow: View {
                         }
                     }
                     .font(.caption)
-                    .foregroundColor(.secondary) // STANDARD LEGIBLE COLOR
+                    .foregroundColor(.secondary)
                 }
                 Spacer()
+                
+                // Info button (if callback provided)
+                if let onInfo = onInfo {
+                    Button(action: {
+                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                        onInfo()
+                    }) {
+                        Image(systemName: "info.circle")
+                            .font(.system(size: 20))
+                            .foregroundColor(.secondary)
+                            .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                }
+                
+                // Download/Play button
                 if isDownloaded {
                     if onPlay != nil {
                         ZStack {

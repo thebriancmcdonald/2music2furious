@@ -1,14 +1,143 @@
 //
 //  PodcastSearchView.swift
-//  2 Music 2 Furious - MILESTONE 14
+//  2 Music 2 Furious - MILESTONE 15
 //
 //  Podcast search and download
 //  UPDATED: Uses shared GlassEpisodeRow for standardized "Played" tracking
 //  UPDATED: Added Drag-to-Reorder for Favorites
+//  NEW: Episode Detail View via info button (navigation push)
+//  NEW: Full episode metadata stored with downloads
+//  NEW: Properly formatted descriptions with clickable links
 //
 
 import SwiftUI
 import UniformTypeIdentifiers
+
+// MARK: - Formatted Description View (Clickable Links + Paragraphs)
+
+struct FormattedDescriptionView: View {
+    let text: String
+    let fontSize: CGFloat
+    
+    init(text: String, fontSize: CGFloat = 15) {
+        self.text = text
+        self.fontSize = fontSize
+    }
+    
+    private var cleanedText: String {
+        cleanHTML(text)
+    }
+    
+    var body: some View {
+        FormattedTextViewRepresentable(
+            text: cleanedText,
+            fontSize: fontSize
+        )
+    }
+    
+    private func cleanHTML(_ html: String) -> String {
+        var text = html
+        
+        // Convert <br>, <br/>, <br /> to newlines
+        text = text.replacingOccurrences(of: "<br\\s*/?>", with: "\n", options: .regularExpression)
+        
+        // Convert </p> and </div> to double newlines (paragraph breaks)
+        text = text.replacingOccurrences(of: "</p>", with: "\n\n", options: .caseInsensitive)
+        text = text.replacingOccurrences(of: "</div>", with: "\n\n", options: .caseInsensitive)
+        
+        // Convert <li> to bullet points
+        text = text.replacingOccurrences(of: "<li[^>]*>", with: "\n• ", options: .regularExpression)
+        
+        // Remove all remaining HTML tags
+        text = text.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+        
+        // Decode HTML entities
+        text = text.replacingOccurrences(of: "&nbsp;", with: " ")
+        text = text.replacingOccurrences(of: "&amp;", with: "&")
+        text = text.replacingOccurrences(of: "&quot;", with: "\"")
+        text = text.replacingOccurrences(of: "&#39;", with: "'")
+        text = text.replacingOccurrences(of: "&apos;", with: "'")
+        text = text.replacingOccurrences(of: "&lt;", with: "<")
+        text = text.replacingOccurrences(of: "&gt;", with: ">")
+        text = text.replacingOccurrences(of: "&#x27;", with: "'")
+        text = text.replacingOccurrences(of: "&#x2F;", with: "/")
+        text = text.replacingOccurrences(of: "&mdash;", with: "\u{2014}")
+        text = text.replacingOccurrences(of: "&ndash;", with: "\u{2013}")
+        text = text.replacingOccurrences(of: "&hellip;", with: "\u{2026}")
+        text = text.replacingOccurrences(of: "&rsquo;", with: "\u{2019}")
+        text = text.replacingOccurrences(of: "&lsquo;", with: "\u{2018}")
+        text = text.replacingOccurrences(of: "&rdquo;", with: "\u{201D}")
+        text = text.replacingOccurrences(of: "&ldquo;", with: "\u{201C}")
+        
+        // Decode numeric entities (&#123; format)
+        let numericEntityPattern = "&#(\\d+);"
+        if let regex = try? NSRegularExpression(pattern: numericEntityPattern) {
+            let range = NSRange(text.startIndex..., in: text)
+            let matches = regex.matches(in: text, range: range)
+            for match in matches.reversed() {
+                if let matchRange = Range(match.range, in: text),
+                   let numRange = Range(match.range(at: 1), in: text),
+                   let codePoint = Int(text[numRange]),
+                   let scalar = Unicode.Scalar(codePoint) {
+                    text.replaceSubrange(matchRange, with: String(Character(scalar)))
+                }
+            }
+        }
+        
+        // Clean up excessive newlines (more than 2 in a row)
+        while text.contains("\n\n\n") {
+            text = text.replacingOccurrences(of: "\n\n\n", with: "\n\n")
+        }
+        
+        return text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
+// MARK: - UIKit Text View with proper sizing
+
+private struct FormattedTextViewRepresentable: UIViewRepresentable {
+    let text: String
+    let fontSize: CGFloat
+    
+    func makeUIView(context: Context) -> UITextView {
+        let textView = UITextView()
+        textView.isEditable = false
+        textView.isScrollEnabled = false
+        textView.backgroundColor = .clear
+        textView.textContainerInset = .zero
+        textView.textContainer.lineFragmentPadding = 0
+        textView.dataDetectorTypes = [.link]
+        textView.linkTextAttributes = [
+            .foregroundColor: UIColor(Color.royalPurple),
+            .underlineStyle: NSUnderlineStyle.single.rawValue
+        ]
+        textView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        textView.setContentHuggingPriority(.defaultHigh, for: .vertical)
+        return textView
+    }
+    
+    func updateUIView(_ textView: UITextView, context: Context) {
+        let paragraphStyle = NSMutableParagraphStyle()
+        paragraphStyle.lineSpacing = 4
+        paragraphStyle.paragraphSpacing = 12
+        
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: UIFont.systemFont(ofSize: fontSize),
+            .foregroundColor: UIColor.secondaryLabel,
+            .paragraphStyle: paragraphStyle
+        ]
+        
+        textView.attributedText = NSAttributedString(string: text, attributes: attributes)
+        textView.invalidateIntrinsicContentSize()
+    }
+    
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: UITextView, context: Context) -> CGSize? {
+        guard let width = proposal.width, width > 0 else { return nil }
+        
+        let size = uiView.sizeThatFits(CGSize(width: width, height: CGFloat.greatestFiniteMagnitude))
+        return CGSize(width: width, height: size.height)
+    }
+}
 
 // MARK: - Navigation Destinations
 
@@ -16,6 +145,7 @@ enum PodcastNavDestination: Hashable {
     case search
     case favorites
     case podcastDetail(Podcast)
+    case downloadedEpisodeDetail(String) // filename
 }
 
 // Sort Enum
@@ -135,7 +265,11 @@ struct PodcastSearchView: View {
                             GlassDownloadedRow(
                                 filename: filename,
                                 searchManager: searchManager,
-                                onPlay: { playEpisode(filename: filename) }
+                                downloadManager: downloadManager,
+                                onPlay: { playEpisode(filename: filename) },
+                                onInfo: {
+                                    navigationPath.append(PodcastNavDestination.downloadedEpisodeDetail(filename))
+                                }
                             )
                             .glassListRowWide()
                             .swipeActions(edge: .trailing) {
@@ -214,7 +348,21 @@ struct PodcastSearchView: View {
                         searchManager: searchManager,
                         downloadManager: downloadManager,
                         speechPlayer: speechPlayer,
+                        navigationPath: $navigationPath,
                         dismissAll: dismiss
+                    )
+                case .downloadedEpisodeDetail(let filename):
+                    DownloadedEpisodeDetailView(
+                        filename: filename,
+                        downloadManager: downloadManager,
+                        searchManager: searchManager,
+                        onPlay: {
+                            playEpisode(filename: filename)
+                        },
+                        onDelete: {
+                            downloadManager.deleteEpisode(filename: filename)
+                            navigationPath.removeLast()
+                        }
                     )
                 }
             }
@@ -222,10 +370,11 @@ struct PodcastSearchView: View {
         .accentColor(.royalPurple)
         .onAppear {
             searchManager.loadIfNeeded()
+            downloadManager.loadIfNeeded()
         }
     }
     
-    // MARK: - Actions
+    // MARK: - Helpers
     
     private func handleFileUpload(result: Result<[URL], Error>) {
         do {
@@ -257,6 +406,21 @@ struct PodcastSearchView: View {
     }
     
     private func playEpisode(filename: String) {
+        // Try to get metadata first
+        if let metadata = downloadManager.getMetadata(for: filename) {
+            let track = Track(
+                title: metadata.episodeTitle,
+                artist: metadata.podcastTitle,
+                filename: filename
+            )
+            let artworkUrl = URL(string: metadata.podcastArtworkUrl)
+            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+            speechPlayer.playNow(track, artworkURL: artworkUrl)
+            dismiss()
+            return
+        }
+        
+        // Fallback: parse from filename
         let nameWithoutExt = filename
             .replacingOccurrences(of: ".mp3", with: "")
             .replacingOccurrences(of: ".m4a", with: "")
@@ -295,13 +459,23 @@ struct PodcastSearchView: View {
     }
 }
 
-// MARK: - Glass Downloaded Episode Row (Unchanged)
+// MARK: - Glass Downloaded Episode Row (With Info Button)
+
 struct GlassDownloadedRow: View {
     let filename: String
     @ObservedObject var searchManager: PodcastSearchManager
+    @ObservedObject var downloadManager: DownloadManager
     let onPlay: () -> Void
+    var onInfo: (() -> Void)? = nil
+    
+    // Use metadata if available, otherwise fallback to parsing
+    private var metadata: DownloadedEpisodeMetadata? {
+        downloadManager.getMetadata(for: filename)
+    }
     
     var podcastName: String {
+        if let meta = metadata { return meta.podcastTitle }
+        
         let cleanName = filename.replacingOccurrences(of: ".mp3", with: "").replacingOccurrences(of: ".m4a", with: "")
         for favorite in searchManager.favoritePodcasts {
             let podcastPrefix = favorite.title + "_"
@@ -314,6 +488,8 @@ struct GlassDownloadedRow: View {
     }
     
     var episodeName: String {
+        if let meta = metadata { return meta.episodeTitle }
+        
         let cleanName = filename.replacingOccurrences(of: ".mp3", with: "").replacingOccurrences(of: ".m4a", with: "")
         for favorite in searchManager.favoritePodcasts {
             let podcastPrefix = favorite.title + "_"
@@ -326,6 +502,9 @@ struct GlassDownloadedRow: View {
     }
     
     var artworkUrl: URL? {
+        if let meta = metadata, !meta.podcastArtworkUrl.isEmpty {
+            return URL(string: meta.podcastArtworkUrl)
+        }
         if let match = searchManager.favoritePodcasts.first(where: { $0.title == podcastName }) {
             return URL(string: match.artworkUrl)
         }
@@ -334,22 +513,200 @@ struct GlassDownloadedRow: View {
     
     var body: some View {
         Button(action: onPlay) {
-            HStack(spacing: 16) {
+            HStack(spacing: 12) {
                 MediaArtworkView(
                     url: artworkUrl, size: 50, cornerRadius: 10,
                     fallbackIcon: "mic.fill", fallbackColor: .royalPurple
                 )
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(episodeName).font(.system(size: 15, weight: .medium)).foregroundColor(.primary).lineLimit(2).multilineTextAlignment(.leading)
-                    Text(podcastName).font(.caption).foregroundColor(.secondary).lineLimit(1)
+                    Text(episodeName)
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundColor(.primary)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+                    Text(podcastName)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
                 }
                 Spacer()
+                
+                // Info button
+                if let onInfo = onInfo {
+                    Button(action: {
+                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                        onInfo()
+                    }) {
+                        Image(systemName: "info.circle")
+                            .font(.system(size: 20))
+                            .foregroundColor(.secondary)
+                            .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                }
+                
+                // Play button
                 ZStack {
                     Circle().fill(Color(white: 0.3)).frame(width: 28, height: 28)
                     Image(systemName: "play.fill").font(.system(size: 12)).foregroundColor(.white).offset(x: 1)
                 }
-            }.padding(12).glassCard(cornerRadius: 16)
-        }.buttonStyle(PlainButtonStyle())
+            }
+            .padding(12)
+            .glassCard(cornerRadius: 16)
+        }
+        .buttonStyle(PlainButtonStyle())
+    }
+}
+
+// MARK: - Downloaded Episode Detail View (Uses Stored Metadata)
+
+struct DownloadedEpisodeDetailView: View {
+    let filename: String
+    @ObservedObject var downloadManager: DownloadManager
+    @ObservedObject var searchManager: PodcastSearchManager
+    let onPlay: () -> Void
+    let onDelete: () -> Void
+    
+    private var metadata: DownloadedEpisodeMetadata? {
+        downloadManager.getMetadata(for: filename)
+    }
+    
+    private var episodeName: String {
+        if let meta = metadata { return meta.episodeTitle }
+        let cleanName = filename.replacingOccurrences(of: ".mp3", with: "").replacingOccurrences(of: ".m4a", with: "")
+        if let underscoreIndex = cleanName.firstIndex(of: "_") {
+            return String(cleanName[cleanName.index(after: underscoreIndex)...])
+        }
+        return cleanName
+    }
+    
+    private var podcastName: String {
+        if let meta = metadata { return meta.podcastTitle }
+        let cleanName = filename.replacingOccurrences(of: ".mp3", with: "").replacingOccurrences(of: ".m4a", with: "")
+        if let underscoreIndex = cleanName.firstIndex(of: "_") {
+            return String(cleanName[..<underscoreIndex])
+        }
+        return "Unknown Podcast"
+    }
+    
+    private var artworkUrl: URL? {
+        if let meta = metadata, !meta.podcastArtworkUrl.isEmpty {
+            return URL(string: meta.podcastArtworkUrl)
+        }
+        return nil
+    }
+    
+    private var formattedDate: String? {
+        guard let meta = metadata else { return nil }
+        let formatter = DateFormatter()
+        formatter.dateStyle = .long
+        formatter.timeStyle = .none
+        return formatter.string(from: meta.episodePubDate)
+    }
+    
+    private var formattedDuration: String? {
+        guard let meta = metadata, meta.episodeDuration > 0 else { return nil }
+        let formatter = DateComponentsFormatter()
+        formatter.allowedUnits = meta.episodeDuration >= 3600 ? [.hour, .minute] : [.minute, .second]
+        formatter.unitsStyle = .abbreviated
+        return formatter.string(from: meta.episodeDuration)
+    }
+    
+    private var episodeDescription: String? {
+        guard let meta = metadata, !meta.episodeDescription.isEmpty else { return nil }
+        return meta.episodeDescription
+    }
+    
+    private var tertiaryText: String {
+        var parts: [String] = []
+        if let duration = formattedDuration { parts.append(duration) }
+        if let date = formattedDate { parts.append(date) }
+        if parts.isEmpty { return "Downloaded" }
+        return parts.joined(separator: " • ")
+    }
+    
+    var body: some View {
+        ZStack {
+            GlassBackgroundView()
+            
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    // Header
+                    MediaDetailHeader(
+                        title: episodeName,
+                        subtitle: podcastName,
+                        tertiaryText: tertiaryText,
+                        artworkURL: artworkUrl,
+                        artworkIcon: "mic.fill",
+                        artworkColor: .royalPurple
+                    )
+                    .padding(.horizontal)
+                    
+                    // Play Button
+                    GlassActionButton(
+                        title: "Play Episode",
+                        icon: "play.fill",
+                        color: .royalPurple,
+                        action: onPlay
+                    )
+                    .padding(.horizontal)
+                    
+                    // Description (formatted with clickable links)
+                    if let description = episodeDescription, !description.isEmpty {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("About This Episode")
+                                .font(.headline)
+                            
+                            FormattedDescriptionView(text: description)
+                        }
+                        .padding()
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(.ultraThinMaterial)
+                        .cornerRadius(16)
+                        .padding(.horizontal)
+                    } else if metadata == nil {
+                        // No metadata - older download
+                        VStack(alignment: .leading, spacing: 12) {
+                            Label("Ready to Play", systemImage: "checkmark.circle.fill")
+                                .font(.subheadline.weight(.medium))
+                                .foregroundColor(.green)
+                            
+                            Text("This episode was downloaded before metadata storage was enabled. Re-download from the podcast to see the full description.")
+                                .font(.system(size: 14))
+                                .foregroundColor(.secondary)
+                                .lineSpacing(4)
+                        }
+                        .padding()
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(.ultraThinMaterial)
+                        .cornerRadius(16)
+                        .padding(.horizontal)
+                    }
+                    
+                    // Delete Button
+                    Button(action: onDelete) {
+                        HStack {
+                            Image(systemName: "trash")
+                            Text("Delete Download")
+                        }
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundColor(.red)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 50)
+                        .background(.ultraThinMaterial)
+                        .cornerRadius(14)
+                    }
+                    .padding(.horizontal)
+                    .padding(.top, 10)
+                    
+                    Spacer(minLength: 50)
+                }
+                .padding(.top)
+            }
+        }
+        .navigationTitle("Episode Details")
+        .navigationBarTitleDisplayMode(.inline)
     }
 }
 
@@ -442,6 +799,201 @@ struct FavoritesDestination: View {
     }
 }
 
+// MARK: - Episode Detail View (From Podcast List - Full Description with Links)
+
+struct EpisodeDetailView: View {
+    let episode: Episode
+    let podcast: Podcast
+    let isDownloaded: Bool
+    let isDownloading: Bool
+    let isPlayed: Bool
+    let onDownload: () -> Void
+    let onPlay: () -> Void
+    let onTogglePlayed: () -> Void
+    let onDelete: (() -> Void)?
+    
+    private var formattedDate: String {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .long
+        formatter.timeStyle = .none
+        return formatter.string(from: episode.pubDate)
+    }
+    
+    private var formattedDuration: String {
+        let formatter = DateComponentsFormatter()
+        formatter.allowedUnits = episode.duration >= 3600 ? [.hour, .minute] : [.minute, .second]
+        formatter.unitsStyle = .abbreviated
+        return formatter.string(from: episode.duration) ?? "Unknown"
+    }
+    
+    var body: some View {
+        ZStack {
+            GlassBackgroundView()
+            
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    // Header with podcast artwork
+                    MediaDetailHeader(
+                        title: episode.title,
+                        subtitle: podcast.title,
+                        tertiaryText: "\(formattedDuration) • \(formattedDate)",
+                        artworkURL: URL(string: podcast.artworkUrl),
+                        artworkIcon: "mic.fill",
+                        artworkColor: .royalPurple
+                    )
+                    .padding(.horizontal)
+                    
+                    // Action Buttons
+                    HStack(spacing: 12) {
+                        // Download/Play Button
+                        GlassActionButton(
+                            title: isDownloaded ? "Play Episode" : "Download",
+                            icon: isDownloaded ? "play.fill" : "arrow.down.circle.fill",
+                            isLoading: isDownloading,
+                            loadingText: "Downloading...",
+                            color: .royalPurple,
+                            action: {
+                                if isDownloaded {
+                                    onPlay()
+                                } else {
+                                    onDownload()
+                                }
+                            }
+                        )
+                        
+                        // Mark Played Button
+                        Button(action: {
+                            onTogglePlayed()
+                            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                        }) {
+                            Image(systemName: isPlayed ? "checkmark.circle.fill" : "checkmark.circle")
+                                .font(.system(size: 22))
+                                .foregroundColor(isPlayed ? .green : .secondary)
+                                .frame(width: 50, height: 50)
+                                .background(.ultraThinMaterial)
+                                .cornerRadius(14)
+                        }
+                    }
+                    .padding(.horizontal)
+                    
+                    // Played Status Badge
+                    if isPlayed {
+                        HStack(spacing: 6) {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundColor(.green)
+                            Text("Played")
+                                .foregroundColor(.secondary)
+                        }
+                        .font(.caption.weight(.medium))
+                        .padding(.horizontal)
+                    }
+                    
+                    // Description (formatted with clickable links)
+                    if !episode.description.isEmpty {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("About This Episode")
+                                .font(.headline)
+                            
+                            FormattedDescriptionView(text: episode.description)
+                        }
+                        .padding()
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(.ultraThinMaterial)
+                        .cornerRadius(16)
+                        .padding(.horizontal)
+                    } else {
+                        VStack(spacing: 12) {
+                            Image(systemName: "text.alignleft")
+                                .font(.largeTitle)
+                                .foregroundColor(.secondary.opacity(0.5))
+                            Text("No description available")
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 40)
+                        .background(.ultraThinMaterial)
+                        .cornerRadius(16)
+                        .padding(.horizontal)
+                    }
+                    
+                    // Delete Button (if downloaded)
+                    if isDownloaded, let onDelete = onDelete {
+                        Button(action: onDelete) {
+                            HStack {
+                                Image(systemName: "trash")
+                                Text("Delete Download")
+                            }
+                            .font(.system(size: 15, weight: .medium))
+                            .foregroundColor(.red)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 50)
+                            .background(.ultraThinMaterial)
+                            .cornerRadius(14)
+                        }
+                        .padding(.horizontal)
+                    }
+                    
+                    Spacer(minLength: 50)
+                }
+                .padding(.top)
+            }
+        }
+        .navigationTitle("Episode Details")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+// MARK: - Episode Info for Navigation
+
+struct EpisodeNavInfo: Hashable {
+    let episodeId: UUID
+    let episodeTitle: String
+    let episodeDescription: String
+    let episodeAudioUrl: String
+    let episodeDuration: TimeInterval
+    let episodePubDate: Date
+    let podcastId: Int
+    let podcastTitle: String
+    let podcastAuthor: String
+    let podcastArtworkUrl: String
+    let podcastFeedUrl: String
+    
+    init(episode: Episode, podcast: Podcast) {
+        self.episodeId = episode.id
+        self.episodeTitle = episode.title
+        self.episodeDescription = episode.description
+        self.episodeAudioUrl = episode.audioUrl
+        self.episodeDuration = episode.duration
+        self.episodePubDate = episode.pubDate
+        self.podcastId = podcast.id
+        self.podcastTitle = podcast.title
+        self.podcastAuthor = podcast.author
+        self.podcastArtworkUrl = podcast.artworkUrl
+        self.podcastFeedUrl = podcast.feedUrl
+    }
+    
+    var episode: Episode {
+        Episode(
+            title: episodeTitle,
+            description: episodeDescription,
+            audioUrl: episodeAudioUrl,
+            duration: episodeDuration,
+            pubDate: episodePubDate
+        )
+    }
+    
+    var podcast: Podcast {
+        Podcast(
+            id: podcastId,
+            title: podcastTitle,
+            author: podcastAuthor,
+            artworkUrl: podcastArtworkUrl,
+            feedUrl: podcastFeedUrl
+        )
+    }
+}
+
 // MARK: - Podcast Detail Destination
 
 struct PodcastDetailDestination: View {
@@ -449,6 +1001,7 @@ struct PodcastDetailDestination: View {
     @ObservedObject var searchManager: PodcastSearchManager
     @ObservedObject var downloadManager: DownloadManager
     @ObservedObject var speechPlayer: AudioPlayer
+    @Binding var navigationPath: NavigationPath
     let dismissAll: () -> Void
     
     @State private var showDownloadedOnly = false
@@ -491,17 +1044,21 @@ struct PodcastDetailDestination: View {
                     Section {
                         ForEach(filteredEpisodes) { episode in
                             let isPlayed = searchManager.isPlayed(episode)
+                            let isDownloaded = downloadManager.isDownloaded(filename: filenameForEpisode(episode))
                             
-                            // UPDATED: Using Shared GlassEpisodeRow
                             GlassEpisodeRow(
                                 title: episode.title,
                                 duration: formatDuration(episode.duration),
                                 isPlayed: isPlayed,
-                                isDownloaded: downloadManager.isDownloaded(filename: filenameForEpisode(episode)),
+                                isDownloaded: isDownloaded,
                                 isDownloading: downloadManager.isDownloading(episodeId: episode.id.uuidString),
                                 downloadColor: .royalPurple,
                                 onDownload: { downloadEpisode(episode) },
-                                onPlay: downloadManager.isDownloaded(filename: filenameForEpisode(episode)) ? { playEpisode(episode) } : nil
+                                onPlay: isDownloaded ? { playEpisode(episode) } : nil,
+                                onInfo: {
+                                    let navInfo = EpisodeNavInfo(episode: episode, podcast: podcast)
+                                    navigationPath.append(navInfo)
+                                }
                             )
                             .glassListRow()
                             .swipeActions(edge: .leading) {
@@ -513,7 +1070,7 @@ struct PodcastDetailDestination: View {
                                 }.tint(.orange)
                             }
                             .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                                if downloadManager.isDownloaded(filename: filenameForEpisode(episode)) {
+                                if isDownloaded {
                                     Button {
                                         downloadManager.deleteEpisode(filename: filenameForEpisode(episode))
                                     } label: {
@@ -525,12 +1082,34 @@ struct PodcastDetailDestination: View {
                     }
                 }
             }
-            .listStyle(.plain).scrollContentBackground(.hidden)
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .navigationDestination(for: EpisodeNavInfo.self) { navInfo in
+                let episode = navInfo.episode
+                let isDownloaded = downloadManager.isDownloaded(filename: filenameForEpisode(episode))
+                
+                EpisodeDetailView(
+                    episode: episode,
+                    podcast: navInfo.podcast,
+                    isDownloaded: isDownloaded,
+                    isDownloading: downloadManager.isDownloading(episodeId: episode.id.uuidString),
+                    isPlayed: searchManager.isPlayed(episode),
+                    onDownload: { downloadEpisode(episode) },
+                    onPlay: { playEpisode(episode) },
+                    onTogglePlayed: { searchManager.togglePlayed(episode) },
+                    onDelete: isDownloaded ? {
+                        downloadManager.deleteEpisode(filename: filenameForEpisode(episode))
+                        navigationPath.removeLast()
+                    } : nil
+                )
+            }
             
             if showingToast {
                 VStack { Spacer(); GlassToastView(message: toastMessage, iconColor: .royalPurple).padding(.bottom, 20) }.zIndex(100)
             }
-        }.navigationTitle("Episodes").navigationBarTitleDisplayMode(.inline)
+        }
+        .navigationTitle("Episodes")
+        .navigationBarTitleDisplayMode(.inline)
     }
     
     // MARK: - Helpers
@@ -544,12 +1123,11 @@ struct PodcastDetailDestination: View {
     private func playEpisode(_ episode: Episode) {
         let filename = filenameForEpisode(episode)
         let track = Track(
-            title: filename.replacingOccurrences(of: ".mp3", with: "").replacingOccurrences(of: "_", with: " "),
+            title: episode.title,
             artist: podcast.title,
             filename: filename
         )
-        var artworkUrl: URL? = nil
-        if let url = URL(string: podcast.artworkUrl) { artworkUrl = url }
+        let artworkUrl = URL(string: podcast.artworkUrl)
         
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         speechPlayer.playNow(track, artworkURL: artworkUrl)
@@ -558,7 +1136,13 @@ struct PodcastDetailDestination: View {
     
     private func downloadEpisode(_ episode: Episode) {
         if downloadManager.isDownloaded(filename: filenameForEpisode(episode)) { showToast("Already downloaded"); return }
-        downloadManager.downloadEpisode(episode, podcastTitle: podcast.title)
+        // Pass full podcast metadata for storage
+        downloadManager.downloadEpisode(
+            episode,
+            podcastTitle: podcast.title,
+            podcastAuthor: podcast.author,
+            podcastArtworkUrl: podcast.artworkUrl
+        )
         showToast("Downloading...")
     }
     
