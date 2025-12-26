@@ -13,6 +13,20 @@ import Combine
 import UIKit
 import SwiftUI
 
+// MARK: - Playback State for Persistence
+
+struct PlaybackState: Codable {
+    let currentTrack: Track?
+    let queue: [Track]
+    let currentIndex: Int
+    let currentPosition: Double
+    let volume: Float
+    let playbackSpeed: Float
+    let isBoostEnabled: Bool
+    let artworkURLString: String?
+    let lastSaveTime: Date
+}
+
 class AudioPlayer: NSObject, ObservableObject {
     
     // MARK: - Published State
@@ -96,10 +110,22 @@ class AudioPlayer: NSObject, ObservableObject {
     let playerType: String
     private let positionKey = "playbackPositions"
     
+    // MARK: - Persistence Properties
+    private var stateKey: String { "playbackState_\(playerType)" }
+    private var periodicSaveTimer: Timer?
+    
     init(type: String) {
         self.playerType = type
         super.init()
         setupEngine()
+        startPeriodicSaveTimer()
+    }
+    
+    private func startPeriodicSaveTimer() {
+        periodicSaveTimer = Timer.scheduledTimer(withTimeInterval: 15.0, repeats: true) { [weak self] _ in
+            guard let self = self, self.isPlaying, self.currentTrack != nil else { return }
+            self.saveFullState()
+        }
     }
     
     private func setupEngine() {
@@ -220,12 +246,83 @@ class AudioPlayer: NSObject, ObservableObject {
             positions[track.filename] = position
             UserDefaults.standard.set(positions, forKey: positionKey)
         }
+        // Also save full state
+        saveFullState()
     }
     
     private func restoreSavedPosition() {
         guard playerType != "Music", let track = currentTrack else { return }
         let positions = UserDefaults.standard.dictionary(forKey: positionKey) as? [String: Double] ?? [:]
         if let saved = positions[track.filename], saved > 5 { seek(to: saved) }
+    }
+    
+    // MARK: - Full State Persistence
+    
+    func saveFullState() {
+        guard currentTrack != nil else { return }
+        
+        let state = PlaybackState(
+            currentTrack: currentTrack,
+            queue: queue,
+            currentIndex: currentIndex,
+            currentPosition: currentTime,
+            volume: volume,
+            playbackSpeed: playbackSpeed,
+            isBoostEnabled: isBoostEnabled,
+            artworkURLString: currentExternalArtworkURL?.absoluteString,
+            lastSaveTime: Date()
+        )
+        
+        if let data = try? JSONEncoder().encode(state) {
+            UserDefaults.standard.set(data, forKey: stateKey)
+        }
+    }
+    
+    func restoreState(completion: (() -> Void)? = nil) {
+        guard let data = UserDefaults.standard.data(forKey: stateKey),
+              let state = try? JSONDecoder().decode(PlaybackState.self, from: data) else {
+            completion?()
+            return
+        }
+        
+        // Check if state is too old (7 days)
+        if Date().timeIntervalSince(state.lastSaveTime) > 7 * 24 * 60 * 60 {
+            completion?()
+            return
+        }
+        
+        // Restore settings
+        volume = state.volume
+        playbackSpeed = state.playbackSpeed
+        isBoostEnabled = state.isBoostEnabled
+        
+        // Restore queue and track
+        queue = state.queue
+        currentIndex = state.currentIndex
+        
+        // Restore artwork URL
+        if let urlString = state.artworkURLString, let url = URL(string: urlString) {
+            currentExternalArtworkURL = url
+        }
+        
+        // Load the track if present
+        if state.currentTrack != nil && !queue.isEmpty {
+            loadTrack(at: state.currentIndex)
+            
+            // Restore position after a short delay (let track load)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                if state.currentPosition > 5 {
+                    self.seek(to: state.currentPosition)
+                }
+                completion?()
+            }
+        } else {
+            completion?()
+        }
+    }
+    
+    func clearSavedState() {
+        UserDefaults.standard.removeObject(forKey: stateKey)
     }
     
     func playNow(_ track: Track, artworkURL: URL? = nil) {
@@ -379,7 +476,7 @@ class AudioPlayer: NSObject, ObservableObject {
         if isShuffled { let current = currentTrack; queue.shuffle(); if let t = current, let idx = queue.firstIndex(where: { $0.id == t.id }) { currentIndex = idx } }
     }
     
-    func clearQueue() { saveCurrentPosition(); stopCurrentPlayback(); queue.removeAll(); currentTrack = nil; currentIndex = 0; isPlaying = false; artwork = nil; LockScreenManager.shared.update() }
+    func clearQueue() { saveCurrentPosition(); stopCurrentPlayback(); queue.removeAll(); currentTrack = nil; currentIndex = 0; isPlaying = false; artwork = nil; clearSavedState(); LockScreenManager.shared.update() }
     
     func addTrack(from url: URL) {
         let filename = url.lastPathComponent
@@ -401,7 +498,7 @@ class AudioPlayer: NSObject, ObservableObject {
     
     static func clearArtworkCache() { cacheQueue.async(flags: .barrier) { artworkCache.removeAll() } }
     
-    deinit { NotificationCenter.default.removeObserver(self); playerItemObserver?.invalidate(); if let observer = timeObserver { avPlayer?.removeTimeObserver(observer) }; engine.stop() }
+    deinit { periodicSaveTimer?.invalidate(); NotificationCenter.default.removeObserver(self); playerItemObserver?.invalidate(); if let observer = timeObserver { avPlayer?.removeTimeObserver(observer) }; engine.stop() }
 }
 
 // MARK: - Lock Screen & Remote Command Manager
@@ -666,8 +763,8 @@ class LockScreenManager {
             let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: colors as CFArray, locations: [0, 1])!
             context.drawLinearGradient(gradient, start: .zero, end: CGPoint(x: size.width, y: size.height), options: [])
             
-            // Draw "2♪" text
-            let text = "2♪"
+            // Draw "2â™ª" text
+            let text = "2â™ª"
             let font = UIFont.systemFont(ofSize: 120, weight: .bold)
             let attributes: [NSAttributedString.Key: Any] = [
                 .font: font,
@@ -737,7 +834,7 @@ class InterruptionManager {
             object: nil  // Changed from session to nil
         )
         
-        print("🔔 Audio interruption observers registered")
+        print("ðŸ”” Audio interruption observers registered")
     }
     
     // MARK: - Standard Interruption (Phone Calls, Alarms)
@@ -749,7 +846,7 @@ class InterruptionManager {
             return
         }
         
-        print("📱 Interruption notification: \(type == .began ? "BEGAN" : "ENDED")")
+        print("ðŸ“± Interruption notification: \(type == .began ? "BEGAN" : "ENDED")")
         
         switch type {
         case .began:
@@ -779,7 +876,7 @@ class InterruptionManager {
             return
         }
         
-        print("🔔 Secondary audio hint: \(type == .begin ? "BEGIN" : "END")")
+        print("ðŸ”” Secondary audio hint: \(type == .begin ? "BEGIN" : "END")")
         
         switch type {
         case .begin:
@@ -806,7 +903,7 @@ class InterruptionManager {
         
         // Pause when headphones are unplugged (standard behavior)
         if reason == .oldDeviceUnavailable {
-            print("🎧 Headphones unplugged - pausing")
+            print("ðŸŽ§ Headphones unplugged - pausing")
             DispatchQueue.main.async {
                 self.musicPlayer?.pause()
                 self.speechPlayer?.pause()
@@ -830,7 +927,7 @@ class InterruptionManager {
             self.speechWasPlaying = speech.isPlaying
             self.originalMusicDucking = music.isDucking
             
-            print("🔇 \(reason) began - music was: \(self.musicWasPlaying), speech was: \(self.speechWasPlaying)")
+            print("ðŸ”‡ \(reason) began - music was: \(self.musicWasPlaying), speech was: \(self.speechWasPlaying)")
             
             // Pause speech
             if speech.isPlaying {
@@ -853,7 +950,7 @@ class InterruptionManager {
                   let music = self.musicPlayer,
                   let speech = self.speechPlayer else { return }
             
-            print("🔊 Interruption ended - resuming music: \(self.musicWasPlaying), speech: \(self.speechWasPlaying)")
+            print("ðŸ”Š Interruption ended - resuming music: \(self.musicWasPlaying), speech: \(self.speechWasPlaying)")
             
             // Restore music ducking state
             music.isDucking = self.originalMusicDucking
