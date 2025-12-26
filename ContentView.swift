@@ -140,11 +140,21 @@ struct ContentView: View {
     // MARK: - Header
     
     private var header: some View {
-        HStack {
-            Text("2 MUSIC 2 FURIOUS")
-                .font(.system(size: 20, weight: .heavy, design: .rounded))
-                .foregroundColor(.white)
-                .shadow(color: .cyan.opacity(0.5), radius: 10, x: 0, y: 0)
+        HStack(spacing: 10) {
+            // App Icon from bundle
+            AppIconView()
+                .frame(width: 36, height: 36)
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            
+            // Two-line title
+            VStack(alignment: .leading, spacing: 0) {
+                Text("2 MUSIC")
+                    .font(.system(size: 14, weight: .heavy, design: .rounded))
+                Text("2 FURIOUS")
+                    .font(.system(size: 14, weight: .heavy, design: .rounded))
+            }
+            .foregroundColor(.white)
+            .shadow(color: .cyan.opacity(0.5), radius: 10, x: 0, y: 0)
             
             Spacer()
             
@@ -170,7 +180,6 @@ struct ContentView: View {
                 .background(Capsule().fill(.ultraThinMaterial).overlay(Capsule().stroke(.white.opacity(0.3), lineWidth: 1)))
             }
         }
-        .padding(.horizontal)
         .padding(.vertical, 8)
     }
     
@@ -291,7 +300,7 @@ struct ContentView: View {
         manager.musicPlayer = musicPlayer
         manager.speechPlayer = speechPlayer
         
-        print("ðŸŽ§ InterruptionManager initialized")
+        print("Ã°Å¸Å½Â§ InterruptionManager initialized")
     }
     
     private func warmUpManagers() {
@@ -532,7 +541,7 @@ struct UpNextView: View {
                             ForEach(0..<min(2, player.queue.count), id: \.self) { i in
                                 let trackIndex = (player.currentIndex + 1 + i) % player.queue.count
                                 if player.queue.indices.contains(trackIndex) {
-                                    Text("â€¢ \(player.queue[trackIndex].title)").font(.system(size: 13, weight: .medium, design: .rounded)).foregroundStyle(.white.opacity(0.9)).lineLimit(1)
+                                    Text("\u{2022} \(player.queue[trackIndex].title)").font(.system(size: 13, weight: .medium, design: .rounded)).foregroundStyle(.white.opacity(0.9)).lineLimit(1)
                                 }
                             }
                         }
@@ -599,5 +608,36 @@ struct SeekBarView: View {
         guard !time.isNaN && !time.isInfinite && time >= 0 else { return "00:00" }
         let totalSeconds = Int(time)
         return String(format: "%02d:%02d", totalSeconds / 60, totalSeconds % 60)
+    }
+}
+
+// MARK: - App Icon Helper
+
+struct AppIconView: View {
+    var body: some View {
+        if let icon = getAppIcon() {
+            Image(uiImage: icon)
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+        } else {
+            // Fallback if icon can't be loaded
+            RoundedRectangle(cornerRadius: 8)
+                .fill(LinearGradient(colors: [.purple, .pink], startPoint: .topLeading, endPoint: .bottomTrailing))
+                .overlay(
+                    Text("2")
+                        .font(.system(size: 20, weight: .bold, design: .rounded))
+                        .foregroundColor(.white)
+                )
+        }
+    }
+    
+    private func getAppIcon() -> UIImage? {
+        guard let iconsDictionary = Bundle.main.infoDictionary?["CFBundleIcons"] as? [String: Any],
+              let primaryIconsDictionary = iconsDictionary["CFBundlePrimaryIcon"] as? [String: Any],
+              let iconFiles = primaryIconsDictionary["CFBundleIconFiles"] as? [String],
+              let lastIcon = iconFiles.last else {
+            return nil
+        }
+        return UIImage(named: lastIcon)
     }
 }
