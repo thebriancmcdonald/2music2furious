@@ -4,6 +4,7 @@
 //
 //  UPDATED: Uses ImageCache for reliable Audiobook covers
 //  FIXED: Artwork logic now uses caching layer instead of raw URLSession
+//  UPDATED: Chapter boundary support for M4B audiobooks (virtual chapters)
 //
 
 import Foundation
@@ -65,7 +66,15 @@ class AudioPlayer: NSObject, ObservableObject {
     private static func getCachedArtwork(for key: String) -> UIImage? { cacheQueue.sync { artworkCache[key] } }
     private static func setCachedArtwork(_ image: UIImage, for key: String) { cacheQueue.async(flags: .barrier) { artworkCache[key] = image } }
     
+    // MARK: - Duration (Chapter-Aware)
+    // Returns chapter duration if track has boundaries, otherwise full file duration
     var duration: Double {
+        // If track has chapter boundaries, return chapter duration
+        if let track = currentTrack, let chapterDuration = track.chapterDuration {
+            return chapterDuration
+        }
+        
+        // Otherwise return full file duration
         var result: Double = 0
         if isUsingEngine {
             guard let file = audioFile else { return 0 }
@@ -80,17 +89,27 @@ class AudioPlayer: NSObject, ObservableObject {
         return result
     }
     
+    // MARK: - Current Time (Chapter-Aware)
+    // Returns position relative to chapter start if track has boundaries
     var currentTime: Double {
-        var result: Double = 0
+        var absoluteTime: Double = 0
         if isUsingEngine {
-            guard isPlaying, let nodeTime = playerNode.lastRenderTime, let playerTime = playerNode.playerTime(forNodeTime: nodeTime) else { return max(0, seekOffset) }
-            result = seekOffset + (Double(playerTime.sampleTime) / audioSampleRate)
+            guard isPlaying, let nodeTime = playerNode.lastRenderTime, let playerTime = playerNode.playerTime(forNodeTime: nodeTime) else { return max(0, seekOffset - (currentTrack?.startTime ?? 0)) }
+            absoluteTime = seekOffset + (Double(playerTime.sampleTime) / audioSampleRate)
         } else {
-            result = avPlayer?.currentTime().seconds ?? 0
+            absoluteTime = avPlayer?.currentTime().seconds ?? 0
         }
+        
         // Safety: Return 0 for invalid times
-        guard result.isFinite && result >= 0 else { return 0 }
-        return result
+        guard absoluteTime.isFinite && absoluteTime >= 0 else { return 0 }
+        
+        // If track has chapter boundaries, return time relative to chapter start
+        if let track = currentTrack, let startTime = track.startTime {
+            let relativeTime = absoluteTime - startTime
+            return max(0, relativeTime)
+        }
+        
+        return absoluteTime
     }
     
     private let engine = AVAudioEngine()
@@ -104,6 +123,9 @@ class AudioPlayer: NSObject, ObservableObject {
     private var avPlayer: AVPlayer?
     private var playerItemObserver: NSKeyValueObservation?
     private var timeObserver: Any?
+    
+    // Chapter boundary monitoring
+    private var chapterEndObserver: Any?
     
     private var currentExternalArtworkURL: URL? = nil
     
@@ -240,10 +262,19 @@ class AudioPlayer: NSObject, ObservableObject {
 
     func saveCurrentPosition() {
         guard playerType != "Music", let track = currentTrack else { return }
-        let position = self.currentTime
-        if position > 5 {
+        // For chapter tracks, save absolute position (not chapter-relative)
+        let absolutePosition: Double
+        if track.hasChapterBoundaries, let startTime = track.startTime {
+            absolutePosition = startTime + self.currentTime
+        } else {
+            absolutePosition = self.currentTime
+        }
+        
+        if absolutePosition > 5 {
             var positions = UserDefaults.standard.dictionary(forKey: positionKey) as? [String: Double] ?? [:]
-            positions[track.filename] = position
+            // Use track ID for chaptered tracks to save per-chapter position
+            let key = track.hasChapterBoundaries ? track.id.uuidString : track.filename
+            positions[key] = absolutePosition
             UserDefaults.standard.set(positions, forKey: positionKey)
         }
         // Also save full state
@@ -253,7 +284,18 @@ class AudioPlayer: NSObject, ObservableObject {
     private func restoreSavedPosition() {
         guard playerType != "Music", let track = currentTrack else { return }
         let positions = UserDefaults.standard.dictionary(forKey: positionKey) as? [String: Double] ?? [:]
-        if let saved = positions[track.filename], saved > 5 { seek(to: saved) }
+        let key = track.hasChapterBoundaries ? track.id.uuidString : track.filename
+        if let saved = positions[key], saved > 5 {
+            // For chapter tracks, seek to saved absolute position
+            if track.hasChapterBoundaries, let startTime = track.startTime {
+                let relativePosition = saved - startTime
+                if relativePosition > 0 {
+                    seek(to: relativePosition)
+                }
+            } else {
+                seek(to: saved)
+            }
+        }
     }
     
     // MARK: - Full State Persistence
@@ -345,11 +387,11 @@ class AudioPlayer: NSObject, ObservableObject {
             isUsingEngine = false
             let asset = AVURLAsset(url: URL(string: track.filename)!)
             if currentExternalArtworkURL == nil { extractArtwork(from: asset) } else { setExternalArtwork(from: currentExternalArtworkURL) }
-            setupAVPlayer(with: AVPlayerItem(asset: asset))
+            setupAVPlayer(with: AVPlayerItem(asset: asset), track: track)
         } else if track.filename.starts(with: "http") {
             isUsingEngine = false
             if let ext = currentExternalArtworkURL { setExternalArtwork(from: ext) } else { self.artwork = nil }
-            setupAVPlayer(with: AVPlayerItem(url: URL(string: track.filename)!))
+            setupAVPlayer(with: AVPlayerItem(url: URL(string: track.filename)!), track: track)
         } else {
             loadLocalFile(track: track)
         }
@@ -365,7 +407,11 @@ class AudioPlayer: NSObject, ObservableObject {
             audioFile = try AVAudioFile(forReading: path)
             audioSampleRate = audioFile!.processingFormat.sampleRate
             engine.reset()
-            scheduleFileSegment(from: 0)
+            
+            // For chapter tracks, start at chapter beginning
+            let startPosition = track.startTime ?? 0
+            scheduleFileSegment(from: startPosition, track: track)
+            
             try engine.start()
             updateAudioEffects()
             restoreSavedPosition()
@@ -378,6 +424,13 @@ class AudioPlayer: NSObject, ObservableObject {
         saveCurrentPosition()
         if engine.isRunning { playerNode.stop(); engine.stop() }
         avPlayer?.pause()
+        
+        // Remove chapter end observer
+        if let observer = chapterEndObserver {
+            avPlayer?.removeTimeObserver(observer)
+            chapterEndObserver = nil
+        }
+        
         if let observer = timeObserver { avPlayer?.removeTimeObserver(observer); timeObserver = nil }
         playerItemObserver?.invalidate()
         avPlayer = nil
@@ -386,19 +439,73 @@ class AudioPlayer: NSObject, ObservableObject {
         LockScreenManager.shared.update()
     }
     
-    private func setupAVPlayer(with item: AVPlayerItem) {
+    // MARK: - AVPlayer Setup (Chapter-Aware)
+    private func setupAVPlayer(with item: AVPlayerItem, track: Track) {
         avPlayer = AVPlayer(playerItem: item)
         updatePlayerVolume()
         playerItemObserver = item.observe(\.status, options: [.new]) { [weak self] item, _ in
             if item.status == .readyToPlay {
-                DispatchQueue.main.async { self?.restoreSavedPosition(); if self?.currentTrack?.filename.starts(with: "http") == true { self?.play() } }
+                DispatchQueue.main.async {
+                    guard let self = self else { return }
+                    
+                    // For chapter tracks, seek to chapter start first
+                    if track.hasChapterBoundaries, let startTime = track.startTime {
+                        self.avPlayer?.seek(to: CMTimeMakeWithSeconds(startTime, preferredTimescale: 600)) { _ in
+                            self.restoreSavedPosition()
+                            if track.filename.starts(with: "http") {
+                                self.play()
+                            }
+                        }
+                    } else {
+                        self.restoreSavedPosition()
+                        if track.filename.starts(with: "http") {
+                            self.play()
+                        }
+                    }
+                }
             }
         }
-        timeObserver = avPlayer?.addPeriodicTimeObserver(forInterval: CMTime(seconds: 1, preferredTimescale: 1), queue: .main) { _ in LockScreenManager.shared.update() }
+        
+        // Standard time observer for lock screen updates
+        timeObserver = avPlayer?.addPeriodicTimeObserver(forInterval: CMTime(seconds: 1, preferredTimescale: 1), queue: .main) { [weak self] time in
+            guard let self = self else { return }
+            LockScreenManager.shared.update()
+            
+            // Check for chapter end (for AVPlayer path)
+            if let track = self.currentTrack,
+               let endTime = track.endTime,
+               time.seconds >= endTime - 0.5 {
+                self.handleChapterEnd()
+            }
+        }
+        
+        // Add boundary time observer for precise chapter end detection
+        if track.hasChapterBoundaries, let endTime = track.endTime {
+            let boundaryTime = CMTimeMakeWithSeconds(endTime, preferredTimescale: 600)
+            chapterEndObserver = avPlayer?.addBoundaryTimeObserver(forTimes: [NSValue(time: boundaryTime)], queue: .main) { [weak self] in
+                self?.handleChapterEnd()
+            }
+        }
     }
     
-    private func scheduleFileSegment(from startTime: Double) {
+    // MARK: - Chapter End Handling
+    private func handleChapterEnd() {
+        guard currentTrack?.hasChapterBoundaries == true else { return }
+        
+        // Auto-advance to next track in queue
+        if currentIndex + 1 < queue.count {
+            next()
+        } else {
+            // End of queue - pause at chapter end
+            pause()
+        }
+    }
+    
+    // MARK: - Schedule File Segment (Chapter-Aware for AVAudioEngine)
+    private func scheduleFileSegment(from startTime: Double, track: Track? = nil) {
         guard let file = audioFile else { return }
+        
+        let trackToUse = track ?? currentTrack
         
         // Safety: Ensure startTime is non-negative
         let safeStartTime = max(0, startTime)
@@ -414,15 +521,37 @@ class AudioPlayer: NSObject, ObservableObject {
         let startFrame = min(calculatedStartFrame, fileLength)
         guard startFrame >= 0 else { return }
         
+        // Calculate end frame (either chapter end or file end)
+        let endFrame: Int64
+        if let trackEndTime = trackToUse?.endTime {
+            let calculatedEndFrame = Int64(trackEndTime * sampleRate)
+            endFrame = min(calculatedEndFrame, fileLength)
+        } else {
+            endFrame = fileLength
+        }
+        
         // Safety: Calculate remaining frames, ensuring non-negative
-        let remainingFramesInt64 = fileLength - startFrame
+        let remainingFramesInt64 = endFrame - startFrame
         guard remainingFramesInt64 > 0 else { return }
         
         // Safe conversion to AVAudioFrameCount (UInt32)
         let remainingFrames = AVAudioFrameCount(min(remainingFramesInt64, Int64(UInt32.max)))
         
         playerNode.stop()
-        playerNode.scheduleSegment(file, startingFrame: AVAudioFramePosition(startFrame), frameCount: remainingFrames, at: nil)
+        
+        // Schedule with completion handler for chapter end detection
+        playerNode.scheduleSegment(file, startingFrame: AVAudioFramePosition(startFrame), frameCount: remainingFrames, at: nil) { [weak self] in
+            DispatchQueue.main.async {
+                guard let self = self,
+                      let currentTrack = self.currentTrack,
+                      currentTrack.hasChapterBoundaries,
+                      self.isPlaying else { return }
+                
+                // Chapter ended - advance to next
+                self.handleChapterEnd()
+            }
+        }
+        
         seekOffset = safeStartTime
         timePitchNode.rate = playbackSpeed
     }
@@ -455,9 +584,35 @@ class AudioPlayer: NSObject, ObservableObject {
         else { loadTrackAndPlay(at: currentIndex == 0 ? queue.count - 1 : currentIndex - 1) }
     }
     
+    // MARK: - Seek (Chapter-Aware)
+    // Time parameter is relative to chapter start for chaptered tracks
     func seek(to time: Double) {
-        if isUsingEngine { scheduleFileSegment(from: time); if isPlaying { playerNode.play() } }
-        else { avPlayer?.seek(to: CMTimeMakeWithSeconds(time, preferredTimescale: 600)) }
+        let absoluteTime: Double
+        
+        // For chapter tracks, convert relative time to absolute file time
+        if let track = currentTrack, let startTime = track.startTime {
+            absoluteTime = startTime + time
+            
+            // Clamp to chapter boundaries
+            let effectiveEndTime = track.endTime ?? duration
+            let clampedTime = max(startTime, min(absoluteTime, effectiveEndTime))
+            
+            if isUsingEngine {
+                scheduleFileSegment(from: clampedTime, track: track)
+                if isPlaying { playerNode.play() }
+            } else {
+                avPlayer?.seek(to: CMTimeMakeWithSeconds(clampedTime, preferredTimescale: 600))
+            }
+        } else {
+            // Regular track - no conversion needed
+            if isUsingEngine {
+                scheduleFileSegment(from: time)
+                if isPlaying { playerNode.play() }
+            } else {
+                avPlayer?.seek(to: CMTimeMakeWithSeconds(time, preferredTimescale: 600))
+            }
+        }
+        
         LockScreenManager.shared.update()
     }
     
@@ -498,7 +653,14 @@ class AudioPlayer: NSObject, ObservableObject {
     
     static func clearArtworkCache() { cacheQueue.async(flags: .barrier) { artworkCache.removeAll() } }
     
-    deinit { periodicSaveTimer?.invalidate(); NotificationCenter.default.removeObserver(self); playerItemObserver?.invalidate(); if let observer = timeObserver { avPlayer?.removeTimeObserver(observer) }; engine.stop() }
+    deinit {
+        periodicSaveTimer?.invalidate()
+        NotificationCenter.default.removeObserver(self)
+        playerItemObserver?.invalidate()
+        if let observer = timeObserver { avPlayer?.removeTimeObserver(observer) }
+        if let observer = chapterEndObserver { avPlayer?.removeTimeObserver(observer) }
+        engine.stop()
+    }
 }
 
 // MARK: - Lock Screen & Remote Command Manager
@@ -549,8 +711,8 @@ class LockScreenManager {
             guard let self = self else { return .commandFailed }
             if let m = self.musicPlayer, m.isPlaying { m.next(); return .success }
             if let s = self.speechPlayer, s.isPlaying { s.next(); return .success }
-            if self.musicWasPlaying, let m = self.musicPlayer, m.currentTrack != nil { m.next(); return .success }
-            if self.speechWasPlaying, let s = self.speechPlayer, s.currentTrack != nil { s.next(); return .success }
+            if let s = self.speechPlayer, s.currentTrack != nil { s.next(); return .success }
+            if let m = self.musicPlayer, m.currentTrack != nil { m.next(); return .success }
             return .commandFailed
         }
         
@@ -558,213 +720,179 @@ class LockScreenManager {
             guard let self = self else { return .commandFailed }
             if let m = self.musicPlayer, m.isPlaying { m.previous(); return .success }
             if let s = self.speechPlayer, s.isPlaying { s.previous(); return .success }
-            if self.musicWasPlaying, let m = self.musicPlayer, m.currentTrack != nil { m.previous(); return .success }
-            if self.speechWasPlaying, let s = self.speechPlayer, s.currentTrack != nil { s.previous(); return .success }
+            if let s = self.speechPlayer, s.currentTrack != nil { s.previous(); return .success }
+            if let m = self.musicPlayer, m.currentTrack != nil { m.previous(); return .success }
+            return .commandFailed
+        }
+        
+        // Skip forward/backward 30 sec
+        center.skipForwardCommand.preferredIntervals = [30]
+        center.skipForwardCommand.addTarget { [weak self] _ in
+            guard let self = self else { return .commandFailed }
+            if let s = self.speechPlayer, (s.isPlaying || s.currentTrack != nil) { s.skipForward(); return .success }
+            if let m = self.musicPlayer, (m.isPlaying || m.currentTrack != nil) { m.skipForward(); return .success }
+            return .commandFailed
+        }
+        
+        center.skipBackwardCommand.preferredIntervals = [30]
+        center.skipBackwardCommand.addTarget { [weak self] _ in
+            guard let self = self else { return .commandFailed }
+            if let s = self.speechPlayer, (s.isPlaying || s.currentTrack != nil) { s.skipBackward(); return .success }
+            if let m = self.musicPlayer, (m.isPlaying || m.currentTrack != nil) { m.skipBackward(); return .success }
+            return .commandFailed
+        }
+        
+        // Seek bar (scrubbing)
+        center.changePlaybackPositionCommand.addTarget { [weak self] event in
+            guard let self = self,
+                  let positionEvent = event as? MPChangePlaybackPositionCommandEvent else {
+                return .commandFailed
+            }
+            
+            // Prefer speech player if it has content
+            if let s = self.speechPlayer, s.currentTrack != nil {
+                s.seek(to: positionEvent.positionTime)
+                return .success
+            }
+            if let m = self.musicPlayer, m.currentTrack != nil {
+                m.seek(to: positionEvent.positionTime)
+                return .success
+            }
             return .commandFailed
         }
     }
     
-    /// Master Toggle: Pause all if any playing, Resume last active if none playing
-    func handleGlobalToggle() {
-        guard let music = musicPlayer, let speech = speechPlayer else { return }
-        
-        let musicPlaying = music.isPlaying
-        let speechPlaying = speech.isPlaying
+    // Toggle: If anything playing -> pause all. If nothing playing -> resume what was playing.
+    private func handleGlobalToggle() {
+        let musicPlaying = musicPlayer?.isPlaying ?? false
+        let speechPlaying = speechPlayer?.isPlaying ?? false
         
         if musicPlaying || speechPlaying {
-            // PAUSE: Save what's currently playing, then pause
-            musicWasPlaying = musicPlaying
-            speechWasPlaying = speechPlaying
-            
-            if musicPlaying { music.pause() }
-            if speechPlaying { speech.pause() }
+            // Something is playing -> pause everything
+            handlePause()
         } else {
-            // RESUME
+            // Nothing playing -> resume
             handleResume()
         }
     }
     
-    /// Resume whatever was last playing
+    private func handlePause() {
+        // Save state before pausing
+        musicWasPlaying = musicPlayer?.isPlaying ?? false
+        speechWasPlaying = speechPlayer?.isPlaying ?? false
+        
+        musicPlayer?.pause()
+        speechPlayer?.pause()
+        update()
+    }
+    
     private func handleResume() {
-        guard let music = musicPlayer, let speech = speechPlayer else { return }
+        // Resume whatever was playing before
+        if musicWasPlaying { musicPlayer?.play() }
+        if speechWasPlaying { speechPlayer?.play() }
         
-        let canResumeMusic = musicWasPlaying && music.currentTrack != nil
-        let canResumeSpeech = speechWasPlaying && speech.currentTrack != nil
-        
-        if canResumeMusic || canResumeSpeech {
-            // Resume what was playing before
-            if canResumeMusic { music.play() }
-            if canResumeSpeech { speech.play() }
-        } else {
-            // Fallback: Nothing tracked, play whatever is loaded
-            // IMPORTANT: Use separate if statements so BOTH can play!
-            if music.currentTrack != nil {
-                musicWasPlaying = true
-                music.play()
-            }
-            if speech.currentTrack != nil {
+        // If nothing was saved as playing but we have loaded tracks, start speech first
+        if !musicWasPlaying && !speechWasPlaying {
+            if speechPlayer?.currentTrack != nil {
+                speechPlayer?.play()
                 speechWasPlaying = true
-                speech.play()
+            } else if musicPlayer?.currentTrack != nil {
+                musicPlayer?.play()
+                musicWasPlaying = true
             }
         }
+        update()
     }
     
-    /// Pause everything and save state
-    private func handlePause() {
-        guard let music = musicPlayer, let speech = speechPlayer else { return }
-        
-        // Save what's playing before we pause
-        musicWasPlaying = music.isPlaying
-        speechWasPlaying = speech.isPlaying
-        
-        music.pause()
-        speech.pause()
-    }
-    
-    /// Called when playback state changes - updates Now Playing display
     func update() {
-        guard let music = musicPlayer, let speech = speechPlayer else { return }
+        let musicPlaying = musicPlayer?.isPlaying ?? false
+        let speechPlaying = speechPlayer?.isPlaying ?? false
         
-        let musicPlaying = music.isPlaying
-        let speechPlaying = speech.isPlaying
-        let musicLoaded = music.currentTrack != nil
-        let speechLoaded = speech.currentTrack != nil
+        let musicTrack = musicPlayer?.currentTrack
+        let speechTrack = speechPlayer?.currentTrack
         
-        // Track when something STARTS playing (for in-app controls)
-        // Only SET flags, never clear them - clearing happens implicitly when
-        // handleGlobalToggle captures the current state before pausing
-        if musicPlaying { musicWasPlaying = true }
-        if speechPlaying { speechWasPlaying = true }
+        let musicArtwork = musicPlayer?.artwork
+        let speechArtwork = speechPlayer?.artwork
         
-        // Build Now Playing info
-        var info = [String: Any]()
+        // Determine display priority and info
+        var info: [String: Any] = [:]
+        
+        // Determine primary player for display
+        let primaryPlayer: AudioPlayer?
+        let primaryArtwork: UIImage?
+        let primaryTitle: String
+        let primaryArtist: String
         
         if musicPlaying && speechPlaying {
-            // BOTH PLAYING: Combined display + App Logo
-            info[MPMediaItemPropertyTitle] = "\(music.currentTrack?.title ?? "Music") + \(speech.currentTrack?.title ?? "Speech")"
-            info[MPMediaItemPropertyArtist] = "\(music.currentTrack?.artist ?? "") / \(speech.currentTrack?.artist ?? "")"
-            setAppLogoArtwork(&info)
-            
+            // Both playing: show combined title, prefer speech artwork
+            primaryPlayer = speechPlayer
+            primaryArtwork = speechArtwork ?? musicArtwork
+            primaryTitle = "\(speechTrack?.title ?? "Speech") + \(musicTrack?.title ?? "Music")"
+            primaryArtist = speechTrack?.artist ?? musicTrack?.artist ?? ""
+        } else if speechPlaying {
+            primaryPlayer = speechPlayer
+            primaryArtwork = speechArtwork
+            primaryTitle = speechTrack?.title ?? "Speech"
+            primaryArtist = speechTrack?.artist ?? ""
         } else if musicPlaying {
-            // ONLY MUSIC PLAYING
-            info[MPMediaItemPropertyTitle] = music.currentTrack?.title ?? "Music"
-            info[MPMediaItemPropertyArtist] = music.currentTrack?.artist ?? ""
-            if let art = music.artwork {
-                info[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: art.size) { _ in art }
-            } else {
-                setAppLogoArtwork(&info) // Fallback for radio/uploads without art
-            }
-            
-        } else if speechPlaying {
-            // ONLY SPEECH PLAYING
-            info[MPMediaItemPropertyTitle] = speech.currentTrack?.title ?? "Speech"
-            info[MPMediaItemPropertyArtist] = speech.currentTrack?.artist ?? ""
-            if let art = speech.artwork {
-                info[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: art.size) { _ in art }
-            } else {
-                setAppLogoArtwork(&info) // Fallback for audiobooks without art
-            }
-            
+            primaryPlayer = musicPlayer
+            primaryArtwork = musicArtwork
+            primaryTitle = musicTrack?.title ?? "Music"
+            primaryArtist = musicTrack?.artist ?? ""
+        } else if speechTrack != nil {
+            // Neither playing but speech has content
+            primaryPlayer = speechPlayer
+            primaryArtwork = speechArtwork
+            primaryTitle = speechTrack?.title ?? "Speech"
+            primaryArtist = speechTrack?.artist ?? ""
+        } else if musicTrack != nil {
+            primaryPlayer = musicPlayer
+            primaryArtwork = musicArtwork
+            primaryTitle = musicTrack?.title ?? "Music"
+            primaryArtist = musicTrack?.artist ?? ""
         } else {
-            // PAUSED - Show what was last playing
-            let bothWerePlaying = musicWasPlaying && speechWasPlaying && musicLoaded && speechLoaded
-            
-            if bothWerePlaying {
-                info[MPMediaItemPropertyTitle] = "\(music.currentTrack?.title ?? "Music") + \(speech.currentTrack?.title ?? "Speech")"
-                info[MPMediaItemPropertyArtist] = "Paused"
-                setAppLogoArtwork(&info)
-                
-            } else if musicWasPlaying && musicLoaded {
-                info[MPMediaItemPropertyTitle] = music.currentTrack?.title ?? "Music"
-                info[MPMediaItemPropertyArtist] = music.currentTrack?.artist ?? "Paused"
-                if let art = music.artwork {
-                    info[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: art.size) { _ in art }
-                } else {
-                    setAppLogoArtwork(&info)
-                }
-                
-            } else if speechWasPlaying && speechLoaded {
-                info[MPMediaItemPropertyTitle] = speech.currentTrack?.title ?? "Speech"
-                info[MPMediaItemPropertyArtist] = speech.currentTrack?.artist ?? "Paused"
-                if let art = speech.artwork {
-                    info[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: art.size) { _ in art }
-                } else {
-                    setAppLogoArtwork(&info)
-                }
-                
-            } else if musicLoaded {
-                info[MPMediaItemPropertyTitle] = music.currentTrack?.title ?? "Music"
-                info[MPMediaItemPropertyArtist] = music.currentTrack?.artist ?? ""
-                if let art = music.artwork {
-                    info[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: art.size) { _ in art }
-                } else {
-                    setAppLogoArtwork(&info)
-                }
-                
-            } else if speechLoaded {
-                info[MPMediaItemPropertyTitle] = speech.currentTrack?.title ?? "Speech"
-                info[MPMediaItemPropertyArtist] = speech.currentTrack?.artist ?? ""
-                if let art = speech.artwork {
-                    info[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: art.size) { _ in art }
-                } else {
-                    setAppLogoArtwork(&info)
-                }
-                
-            } else {
-                info[MPMediaItemPropertyTitle] = "2 Music 2 Furious"
-                info[MPMediaItemPropertyArtist] = "Ready to Play"
-                setAppLogoArtwork(&info)
-            }
+            // Nothing loaded
+            MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+            return
         }
         
-        // Time/Duration from appropriate player
-        let primaryPlayer: AudioPlayer
-        if musicPlaying {
-            primaryPlayer = music
-        } else if speechPlaying {
-            primaryPlayer = speech
-        } else if musicWasPlaying && musicLoaded {
-            primaryPlayer = music
-        } else if speechWasPlaying && speechLoaded {
-            primaryPlayer = speech
-        } else if musicLoaded {
-            primaryPlayer = music
-        } else {
-            primaryPlayer = speech
+        info[MPMediaItemPropertyTitle] = primaryTitle
+        info[MPMediaItemPropertyArtist] = primaryArtist
+        
+        // Duration and elapsed time from primary player
+        if let player = primaryPlayer {
+            let duration = player.duration
+            if duration.isFinite && duration > 0 {
+                info[MPMediaItemPropertyPlaybackDuration] = duration
+                info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = player.currentTime
+            }
+            info[MPNowPlayingInfoPropertyPlaybackRate] = player.isPlaying ? Double(player.playbackSpeed) : 0.0
         }
         
-        info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = primaryPlayer.currentTime
-        info[MPMediaItemPropertyPlaybackDuration] = primaryPlayer.duration
-        info[MPNowPlayingInfoPropertyPlaybackRate] = primaryPlayer.isPlaying ? Double(primaryPlayer.playbackSpeed) : 0.0
+        // Artwork
+        if let image = primaryArtwork {
+            info[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
+        } else {
+            addFallbackArtwork(to: &info)
+        }
         
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
     }
     
-    /// Helper to set app logo artwork with fallback
-    private func setAppLogoArtwork(_ info: inout [String: Any]) {
-        // Try different possible asset names
-        let possibleNames = ["AppLogo", "AppIcon", "logo", "Logo", "app_logo"]
-        
-        for name in possibleNames {
-            if let image = UIImage(named: name) {
-                info[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
-                return
-            }
-        }
-        
-        // Final fallback: Create a simple purple gradient image
+    private func addFallbackArtwork(to info: inout [String: Any]) {
         let size = CGSize(width: 300, height: 300)
         UIGraphicsBeginImageContextWithOptions(size, false, 0)
         if let context = UIGraphicsGetCurrentContext() {
+            // Draw gradient
             let colors = [
-                UIColor(red: 0.9, green: 0.2, blue: 0.6, alpha: 1.0).cgColor,
-                UIColor(red: 0.4, green: 0.2, blue: 0.8, alpha: 1.0).cgColor
+                UIColor.systemPink.cgColor,
+                UIColor.systemPurple.cgColor
             ]
             let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: colors as CFArray, locations: [0, 1])!
             context.drawLinearGradient(gradient, start: .zero, end: CGPoint(x: size.width, y: size.height), options: [])
             
-            // Draw "2â™ª" text
-            let text = "2â™ª"
+            // Draw "2♪" text
+            let text = "2♪"
             let font = UIFont.systemFont(ofSize: 120, weight: .bold)
             let attributes: [NSAttributedString.Key: Any] = [
                 .font: font,
@@ -834,7 +962,7 @@ class InterruptionManager {
             object: nil  // Changed from session to nil
         )
         
-        print("ðŸ”” Audio interruption observers registered")
+        print("🎙 Audio interruption observers registered")
     }
     
     // MARK: - Standard Interruption (Phone Calls, Alarms)
@@ -846,7 +974,7 @@ class InterruptionManager {
             return
         }
         
-        print("ðŸ“± Interruption notification: \(type == .began ? "BEGAN" : "ENDED")")
+        print("📱 Interruption notification: \(type == .began ? "BEGAN" : "ENDED")")
         
         switch type {
         case .began:
@@ -876,7 +1004,7 @@ class InterruptionManager {
             return
         }
         
-        print("ðŸ”” Secondary audio hint: \(type == .begin ? "BEGIN" : "END")")
+        print("🔈 Secondary audio hint: \(type == .begin ? "BEGIN" : "END")")
         
         switch type {
         case .begin:
@@ -903,7 +1031,7 @@ class InterruptionManager {
         
         // Pause when headphones are unplugged (standard behavior)
         if reason == .oldDeviceUnavailable {
-            print("ðŸŽ§ Headphones unplugged - pausing")
+            print("🎧 Headphones unplugged - pausing")
             DispatchQueue.main.async {
                 self.musicPlayer?.pause()
                 self.speechPlayer?.pause()
@@ -927,7 +1055,7 @@ class InterruptionManager {
             self.speechWasPlaying = speech.isPlaying
             self.originalMusicDucking = music.isDucking
             
-            print("ðŸ”‡ \(reason) began - music was: \(self.musicWasPlaying), speech was: \(self.speechWasPlaying)")
+            print("⏸️ \(reason) began - music was: \(self.musicWasPlaying), speech was: \(self.speechWasPlaying)")
             
             // Pause speech
             if speech.isPlaying {
@@ -950,7 +1078,7 @@ class InterruptionManager {
                   let music = self.musicPlayer,
                   let speech = self.speechPlayer else { return }
             
-            print("ðŸ”Š Interruption ended - resuming music: \(self.musicWasPlaying), speech: \(self.speechWasPlaying)")
+            print("▶️ Interruption ended - resuming music: \(self.musicWasPlaying), speech: \(self.speechWasPlaying)")
             
             // Restore music ducking state
             music.isDucking = self.originalMusicDucking
