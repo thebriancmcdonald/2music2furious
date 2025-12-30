@@ -5,6 +5,7 @@
 //  Radio search with filters - Uses SharedComponents for consistency
 //  UPDATED: Passes Station Artwork to AudioPlayer for Background Blur
 //  UPDATED: Added Drag-to-Reorder for Favorites
+//  FIX: Prevent repeated auto-search, show error messages with retry
 //
 
 import SwiftUI
@@ -25,6 +26,7 @@ struct RadioSearchView: View {
     @State private var selectedGenre: String? = nil
     @State private var selectedCountry: String? = nil
     @State private var selectedBitrate: Int? = nil
+    @State private var hasStartedInitialSearch = false // Prevent repeated auto-search
     
     // Preset Filters
     let genres = ["Pop", "Rock", "Jazz", "Classical", "Hip Hop", "Electronic", "News", "Talk", "Country", "Indie"]
@@ -166,13 +168,49 @@ struct RadioSearchView: View {
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
                         .padding(.top, 40)
+                    } else if let error = radioAPI.errorMessage {
+                        // ERROR STATE with Retry
+                        VStack(spacing: 16) {
+                            Image(systemName: "wifi.exclamationmark")
+                                .font(.system(size: 40))
+                                .foregroundColor(.secondary)
+                            
+                            Text(error)
+                                .foregroundColor(.secondary)
+                                .multilineTextAlignment(.center)
+                                .padding(.horizontal)
+                            
+                            Button(action: {
+                                performSearch()
+                            }) {
+                                HStack {
+                                    Image(systemName: "arrow.clockwise")
+                                    Text("Retry")
+                                }
+                                .padding(.horizontal, 20)
+                                .padding(.vertical, 10)
+                                .background(Color.royalPurple)
+                                .foregroundColor(.white)
+                                .cornerRadius(20)
+                            }
+                        }
+                        .frame(maxWidth: .infinity)
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                        .padding(.top, 40)
                     } else if radioAPI.searchResults.isEmpty {
                         HStack {
                             Spacer()
                             if searchText.isEmpty && selectedGenre == nil && selectedCountry == nil && selectedBitrate == nil {
+                                // Initial load - only trigger once
                                 Text("Loading Top 100...")
                                     .foregroundColor(.secondary)
-                                    .onAppear { performSearch() }
+                                    .onAppear {
+                                        if !hasStartedInitialSearch {
+                                            hasStartedInitialSearch = true
+                                            performSearch()
+                                        }
+                                    }
                             } else {
                                 Text("No stations found")
                                     .foregroundColor(.secondary)
