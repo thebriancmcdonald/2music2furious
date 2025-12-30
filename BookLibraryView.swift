@@ -77,6 +77,11 @@ let supportedAudiobookTypes: [UTType] = buildSupportedAudioTypes()
 
 /// Reads chapter metadata from M4B files WITHOUT extracting audio
 /// This is instant (~2 seconds) compared to extraction (~10 minutes for long books)
+/// 
+/// Strategy:
+/// 1. Try Apple's AVFoundation chapter API first (works for properly tagged files)
+/// 2. If no chapters found, try direct MP4 chpl atom parsing (works for inAudible, etc.)
+/// 3. If still nothing, treat as single chapter
 struct M4BChapterReader {
     
     /// Chapter info with time pointers
@@ -105,6 +110,7 @@ struct M4BChapterReader {
         // Load metadata
         let metadata = try await asset.load(.commonMetadata)
         let duration = try await asset.load(.duration)
+        let fileDuration = CMTimeGetSeconds(duration)
         
         // Extract title, author, artwork from metadata
         var title: String? = nil
@@ -121,17 +127,15 @@ struct M4BChapterReader {
             }
         }
         
-        // Load chapter locales
-        let locales = try await asset.load(.availableChapterLocales)
-        
         var chapters: [ChapterInfo] = []
         
+        // APPROACH 1: Try Apple's AVFoundation chapter API
+        let locales = try await asset.load(.availableChapterLocales)
+        
         if let locale = locales.first {
-            // Get chapter metadata groups
             let chapterGroups = try await asset.loadChapterMetadataGroups(bestMatchingPreferredLanguages: [locale.identifier])
             
             for (index, group) in chapterGroups.enumerated() {
-                // Extract chapter title
                 var chapterTitle = "Chapter \(index + 1)"
                 for item in group.items {
                     if item.commonKey == .commonKeyTitle {
@@ -153,12 +157,35 @@ struct M4BChapterReader {
             }
         }
         
-        // If no chapters found, treat entire file as one chapter
+        // APPROACH 2: If Apple API found nothing, try direct MP4 parsing
         if chapters.isEmpty {
+            print("📖 Apple API found no chapters, trying direct MP4 parsing...")
+            
+            if var mp4Chapters = MP4ChapterParser.parseChapters(from: url) {
+                // Update last chapter's end time with file duration
+                MP4ChapterParser.updateLastChapterEndTime(chapters: &mp4Chapters, fileDuration: fileDuration)
+                
+                // Convert to our ChapterInfo format
+                chapters = mp4Chapters.map { mp4Chapter in
+                    ChapterInfo(
+                        title: mp4Chapter.title,
+                        startTime: mp4Chapter.startTime,
+                        endTime: mp4Chapter.endTime,
+                        index: mp4Chapter.index
+                    )
+                }
+                
+                print("📖 Direct parsing found \(chapters.count) chapters!")
+            }
+        }
+        
+        // APPROACH 3: If still no chapters, treat entire file as one chapter
+        if chapters.isEmpty {
+            print("📖 No chapters found, treating as single-chapter audiobook")
             chapters.append(ChapterInfo(
                 title: title ?? "Full Audiobook",
                 startTime: 0,
-                endTime: CMTimeGetSeconds(duration),
+                endTime: fileDuration,
                 index: 0
             ))
         }
@@ -166,15 +193,32 @@ struct M4BChapterReader {
         return (chapters, title, author, artwork)
     }
     
-    /// Check if file has embedded chapters
+    /// Check if file has embedded chapters (checks both Apple API and direct parsing)
     static func hasChapters(url: URL) async -> Bool {
+        print("📖 hasChapters checking: \(url.path)")
+        
+        // First try Apple API
         let asset = AVURLAsset(url: url)
         do {
             let locales = try await asset.load(.availableChapterLocales)
-            return !locales.isEmpty
+            print("📖 Apple API locales: \(locales)")
+            if !locales.isEmpty {
+                print("📖 Apple API found chapters!")
+                return true
+            }
         } catch {
-            return false
+            print("📖 Apple API error: \(error)")
         }
+        
+        // Try direct MP4 parsing
+        print("📖 Trying direct MP4 parsing...")
+        if let chapters = MP4ChapterParser.parseChapters(from: url), !chapters.isEmpty {
+            print("📖 Direct parsing found \(chapters.count) chapters!")
+            return true
+        }
+        
+        print("📖 No chapters found by either method")
+        return false
     }
 }
 
@@ -380,6 +424,8 @@ struct BookLibraryView: View {
     
     @MainActor
     private func processM4BFiles(_ urls: [URL]) async {
+        print("🎧 processM4BFiles called with \(urls.count) files")
+        
         m4bImportState.isProcessing = true
         m4bImportState.statusMessage = "Reading audiobook metadata..."
         
@@ -388,6 +434,8 @@ struct BookLibraryView: View {
         var totalChapters = 0
         
         for url in urls {
+            print("🎧 Processing: \(url.lastPathComponent)")
+            
             // Start security-scoped resource access
             let accessing = url.startAccessingSecurityScopedResource()
             defer {
@@ -400,21 +448,34 @@ struct BookLibraryView: View {
             let filename = url.lastPathComponent
             let destinationURL = documentsPath.appendingPathComponent(filename)
             
+            print("🎧 Destination: \(destinationURL.path)")
+            
             do {
                 // Copy to local documents
                 if FileManager.default.fileExists(atPath: destinationURL.path) {
                     try FileManager.default.removeItem(at: destinationURL)
+                    print("🎧 Removed existing file")
                 }
                 try FileManager.default.copyItem(at: url, to: destinationURL)
+                print("🎧 File copied successfully")
+                
+                // Verify file exists and is readable
+                let fileSize = try FileManager.default.attributesOfItem(atPath: destinationURL.path)[.size] as? Int ?? 0
+                print("🎧 File size: \(fileSize) bytes")
                 
                 m4bImportState.statusMessage = "Reading chapters..."
                 
                 // Check if file has chapters
+                print("🎧 Checking for chapters...")
                 let hasChapters = await M4BChapterReader.hasChapters(url: destinationURL)
+                print("🎧 hasChapters = \(hasChapters)")
                 
                 if hasChapters {
+                    print("🎧 Reading chapter metadata...")
                     // Read chapter metadata (FAST - no extraction!)
                     let (chapters, title, author, artwork) = try await M4BChapterReader.readChapterMetadata(from: destinationURL)
+                    
+                    print("🎧 Found \(chapters.count) chapters, title: \(title ?? "nil"), author: \(author ?? "nil")")
                     
                     let bookTitle = title ?? url.deletingPathExtension().lastPathComponent
                         .replacingOccurrences(of: "_", with: " ")
@@ -453,6 +514,7 @@ struct BookLibraryView: View {
                     totalChapters += chapters.count
                     
                 } else {
+                    print("🎧 No chapters found, creating single-chapter book")
                     // No chapters - treat as single-chapter audiobook
                     let title = filename
                         .replacingOccurrences(of: "_", with: " ")
@@ -478,7 +540,7 @@ struct BookLibraryView: View {
                 }
                 
             } catch {
-                print("M4B processing error: \(error)")
+                print("🎧 M4B processing error: \(error)")
                 // Clean up on error
                 try? FileManager.default.removeItem(at: destinationURL)
             }

@@ -38,7 +38,6 @@ struct ContentView: View {
     
     // Feature Toggles
     @State private var backgroundModeEnabled = false
-    @State private var voiceBoostEnabled = false
     
     // Track if we've restored state this session
     @State private var hasRestoredState = false
@@ -124,7 +123,6 @@ struct ContentView: View {
             }
         }
         .onChange(of: backgroundModeEnabled) { musicPlayer.isDucking = $0 }
-        .onChange(of: voiceBoostEnabled) { speechPlayer.isBoostEnabled = $0 }
     }
     
     // MARK: - Background
@@ -140,21 +138,11 @@ struct ContentView: View {
     // MARK: - Header
     
     private var header: some View {
-        HStack(spacing: 10) {
-            // App Icon from bundle
-            AppIconView()
-                .frame(width: 36, height: 36)
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-            
-            // Two-line title
-            VStack(alignment: .leading, spacing: 0) {
-                Text("2 MUSIC")
-                    .font(.system(size: 14, weight: .heavy, design: .rounded))
-                Text("2 FURIOUS")
-                    .font(.system(size: 14, weight: .heavy, design: .rounded))
-            }
-            .foregroundColor(.white)
-            .shadow(color: .cyan.opacity(0.5), radius: 10, x: 0, y: 0)
+        HStack {
+            Text("2 MUSIC 2 FURIOUS")
+                .font(.system(size: 20, weight: .heavy, design: .rounded))
+                .foregroundColor(.white)
+                .shadow(color: .cyan.opacity(0.5), radius: 10, x: 0, y: 0)
             
             Spacer()
             
@@ -180,6 +168,7 @@ struct ContentView: View {
                 .background(Capsule().fill(.ultraThinMaterial).overlay(Capsule().stroke(.white.opacity(0.3), lineWidth: 1)))
             }
         }
+        .padding(.horizontal)
         .padding(.vertical, 8)
     }
     
@@ -194,16 +183,8 @@ struct ContentView: View {
                         Text("MUSIC").font(.system(size: 10, weight: .bold, design: .rounded)).foregroundStyle(.white.opacity(0.8))
                     }
                     Spacer()
-                    Button(action: { backgroundModeEnabled.toggle() }) {
-                        HStack(spacing: 4) {
-                            Image(systemName: backgroundModeEnabled ? "speaker.zzz.fill" : "speaker.wave.3.fill")
-                            Text("QUIET").font(.system(size: 9, weight: .bold))
-                        }
-                        .padding(.horizontal, 8).padding(.vertical, 4)
-                        .background(backgroundModeEnabled ? Color.deepResumePurple : Color.black.opacity(0.3))
-                        .clipShape(Capsule())
-                        .overlay(Capsule().stroke(backgroundModeEnabled ? Color.royalPurple : Color.white.opacity(0.2), lineWidth: 1))
-                    }.foregroundColor(.white)
+                    // Segmented Toggle: Normal | Quiet
+                    MusicModeToggle(isDucking: $backgroundModeEnabled)
                 }
                 Spacer()
                 TrackInfoView(player: musicPlayer)
@@ -239,16 +220,8 @@ struct ContentView: View {
                         Text("SPEECH").font(.system(size: 10, weight: .bold, design: .rounded)).foregroundStyle(.white.opacity(0.8))
                     }
                     Spacer()
-                    Button(action: { voiceBoostEnabled.toggle() }) {
-                        HStack(spacing: 4) {
-                            Image(systemName: voiceBoostEnabled ? "waveform.path.ecg" : "waveform")
-                            Text("BOOST").font(.system(size: 9, weight: .bold))
-                        }
-                        .padding(.horizontal, 8).padding(.vertical, 4)
-                        .background(voiceBoostEnabled ? Color.deepResumePurple : Color.black.opacity(0.3))
-                        .clipShape(Capsule())
-                        .overlay(Capsule().stroke(voiceBoostEnabled ? Color.royalPurple : Color.white.opacity(0.2), lineWidth: 1))
-                    }.foregroundColor(.white)
+                    // Segmented Toggle: Quality | Boost
+                    SpeechModeToggle(audioMode: $speechPlayer.audioMode)
                 }
                 Spacer()
                 TrackInfoView(player: speechPlayer)
@@ -300,7 +273,7 @@ struct ContentView: View {
         manager.musicPlayer = musicPlayer
         manager.speechPlayer = speechPlayer
         
-        print("Ã°Å¸Å½Â§ InterruptionManager initialized")
+        print("🎧 InterruptionManager initialized")
     }
     
     private func warmUpManagers() {
@@ -541,7 +514,7 @@ struct UpNextView: View {
                             ForEach(0..<min(2, player.queue.count), id: \.self) { i in
                                 let trackIndex = (player.currentIndex + 1 + i) % player.queue.count
                                 if player.queue.indices.contains(trackIndex) {
-                                    Text("\u{2022} \(player.queue[trackIndex].title)").font(.system(size: 13, weight: .medium, design: .rounded)).foregroundStyle(.white.opacity(0.9)).lineLimit(1)
+                                    Text("• \(player.queue[trackIndex].title)").font(.system(size: 13, weight: .medium, design: .rounded)).foregroundStyle(.white.opacity(0.9)).lineLimit(1)
                                 }
                             }
                         }
@@ -611,33 +584,84 @@ struct SeekBarView: View {
     }
 }
 
-// MARK: - App Icon Helper
+// MARK: - Mode Toggle Components
 
-struct AppIconView: View {
-    var body: some View {
-        if let icon = getAppIcon() {
-            Image(uiImage: icon)
-                .resizable()
-                .aspectRatio(contentMode: .fit)
-        } else {
-            // Fallback if icon can't be loaded
-            RoundedRectangle(cornerRadius: 8)
-                .fill(LinearGradient(colors: [.purple, .pink], startPoint: .topLeading, endPoint: .bottomTrailing))
-                .overlay(
-                    Text("2")
-                        .font(.system(size: 20, weight: .bold, design: .rounded))
-                        .foregroundColor(.white)
-                )
-        }
-    }
+/// Music mode toggle: Normal | Quiet
+struct MusicModeToggle: View {
+    @Binding var isDucking: Bool
     
-    private func getAppIcon() -> UIImage? {
-        guard let iconsDictionary = Bundle.main.infoDictionary?["CFBundleIcons"] as? [String: Any],
-              let primaryIconsDictionary = iconsDictionary["CFBundlePrimaryIcon"] as? [String: Any],
-              let iconFiles = primaryIconsDictionary["CFBundleIconFiles"] as? [String],
-              let lastIcon = iconFiles.last else {
-            return nil
+    var body: some View {
+        HStack(spacing: 0) {
+            // Normal
+            Button(action: { withAnimation(.easeInOut(duration: 0.2)) { isDucking = false } }) {
+                HStack(spacing: 3) {
+                    Image(systemName: "speaker.wave.2.fill")
+                        .font(.system(size: 9))
+                    Text("Normal")
+                        .font(.system(size: 9, weight: .semibold))
+                }
+                .foregroundColor(!isDucking ? .white : .white.opacity(0.5))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+                .background(!isDucking ? Color.white.opacity(0.25) : Color.clear)
+            }
+            
+            // Quiet
+            Button(action: { withAnimation(.easeInOut(duration: 0.2)) { isDucking = true } }) {
+                HStack(spacing: 3) {
+                    Image(systemName: "speaker.wave.1.fill")
+                        .font(.system(size: 9))
+                    Text("Quiet")
+                        .font(.system(size: 9, weight: .semibold))
+                }
+                .foregroundColor(isDucking ? .white : .white.opacity(0.5))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+                .background(isDucking ? Color.white.opacity(0.25) : Color.clear)
+            }
         }
-        return UIImage(named: lastIcon)
+        .background(Color.black.opacity(0.3))
+        .clipShape(Capsule())
+        .overlay(Capsule().stroke(Color.white.opacity(0.2), lineWidth: 1))
+    }
+}
+
+/// Speech mode toggle: Quality | Boost
+struct SpeechModeToggle: View {
+    @Binding var audioMode: AudioPlayer.AudioMode
+    
+    var body: some View {
+        HStack(spacing: 0) {
+            // Quality
+            Button(action: { withAnimation(.easeInOut(duration: 0.2)) { audioMode = .quality } }) {
+                HStack(spacing: 3) {
+                    Image(systemName: "waveform")
+                        .font(.system(size: 9))
+                    Text("Quality")
+                        .font(.system(size: 9, weight: .semibold))
+                }
+                .foregroundColor(audioMode == .quality ? .white : .white.opacity(0.5))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+                .background(audioMode == .quality ? Color.white.opacity(0.25) : Color.clear)
+            }
+            
+            // Boost
+            Button(action: { withAnimation(.easeInOut(duration: 0.2)) { audioMode = .boost } }) {
+                HStack(spacing: 3) {
+                    Image(systemName: "waveform.path.ecg")
+                        .font(.system(size: 9))
+                    Text("Boost")
+                        .font(.system(size: 9, weight: .semibold))
+                }
+                .foregroundColor(audioMode == .boost ? .white : .white.opacity(0.5))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+                .background(audioMode == .boost ? Color.deepResumePurple : Color.clear)
+            }
+        }
+        .background(Color.black.opacity(0.3))
+        .clipShape(Capsule())
+        .overlay(Capsule().stroke(audioMode == .boost ? Color.royalPurple : Color.white.opacity(0.2), lineWidth: 1))
     }
 }
