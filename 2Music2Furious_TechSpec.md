@@ -2,118 +2,106 @@
 
 ---
 
-# Ã¢â€ºâ€ STOP Ã¢â‚¬â€ READ BEFORE WRITING ANY CODE Ã¢â€ºâ€
+# STOP - READ BEFORE WRITING ANY CODE
 
-This app has **dual audio players** (music + speech) that play simultaneously. The lock screen, AirPods, and interruption handling are fragile and interconnected. Changes that seem safe can break background playback, resume behavior, or cause crashes.
+Dual audio players (music + speech) play simultaneously. Lock screen, AirPods, and interruption handling are fragile and interconnected. Changes that seem safe can break background playback, resume behavior, or cause crashes.
 
-**Ã°Å¸â€â€ž AFTER CONTEXT COMPACTION:** Re-read this entire document. Compaction loses details.
-
----
-
-## SUMMARY: THE RULES
-
-> âš ï¸ **THIS SUMMARY STAYS AT THE TOP.** Don't move it to the bottomâ€”Claude needs to see this first, not last.
-
-1. **Read this entire document after context compaction**
-2. **Read the "8 things" before touching any playback code**
-3. **Follow the patterns exactly** when adding new features
-4. **Don't modify working code** unless fixing a specific bug
-5. **When in doubt, ask** â€” especially for lock screen / audio session / interruptions
-6. **Test the checklist** after every change
-7. **Simple is better** â€” the boolean flags in LockScreenManager work; don't add complexity
-8. **Don't reinvent wheels** â€” use SwiftSoup for HTML parsing, Readability.js for article extraction
-
-If something seems like it needs a change to the core audio system, **tell the user and discuss options** rather than making the change directly.
+**AFTER CONTEXT COMPACTION:** Re-read this entire document. Compaction loses details.
 
 ---
 
-## THE 8 THINGS THAT WILL BREAK THE APP
+## THE RULES
 
-### 1. LockScreenManager.update() Ã¢â‚¬â€ THE MOST FRAGILE CODE
+1. Read this entire document after context compaction
+2. Read the "10 critical systems" before touching playback code
+3. Follow patterns exactly when adding features
+4. Don't modify working code unless fixing a specific bug
+5. When in doubt, ask - especially for lock screen / audio session / interruptions
+6. Test the checklist after every change
+7. Simple is better - boolean flags in LockScreenManager work; don't add complexity
+8. Don't reinvent wheels - use SwiftSoup for HTML, Readability.js for articles
 
-**Location:** `AudioPlayer.swift`, class `LockScreenManager`
+If something needs a change to core audio, **tell the user and discuss options first**.
 
-This method determines what shows on the lock screen and Control Center. It uses `musicWasPlaying` and `speechWasPlaying` boolean flags to track state across pause/resume cycles. The logic handles 7+ different combinations of "what's playing" and "what was playing."
+---
 
-```
-Ã°Å¸â€Â´ DO NOT MODIFY the state-to-display mapping logic
-Ã°Å¸â€Â´ DO NOT MODIFY the "bothWerePlaying" detection logic
-Ã°Å¸â€Â´ DO NOT CHANGE the order of if/else conditions
-Ã°Å¸â€Â´ DO NOT add new state tracking variables (the existing flags work)
-```
+## 10 CRITICAL SYSTEMS - DO NOT MODIFY WITHOUT DISCUSSION
 
-**If you think you need to change it:** STOP. Tell the user. Discuss alternatives.
+### 1. LockScreenManager.update()
 
-**Recent lesson learned:** Adding a `lastActivePlayer` string variable to "improve" pause state tracking broke the entire lock screen display. The original boolean flags (`musicWasPlaying`, `speechWasPlaying`) are simple and correct. Don't overcomplicate.
+Location: `AudioPlayer.swift`, class `LockScreenManager`
+
+Determines lock screen and Control Center display. Uses `musicWasPlaying` and `speechWasPlaying` boolean flags. Handles 7+ state combinations.
+
+DO NOT:
+- Modify state-to-display mapping logic
+- Modify "bothWerePlaying" detection
+- Change if/else condition order
+- Add new state tracking variables
+
+Lesson learned: Adding `lastActivePlayer` string broke everything. The boolean flags are correct. Don't overcomplicate.
 
 ---
 
 ### 2. AudioPlayer @Published didSet Triggers
 
-**Location:** `AudioPlayer.swift`, lines ~33-90
+Location: `AudioPlayer.swift`, lines ~33-90
 
 These trigger `LockScreenManager.shared.update()` automatically:
+- `isPlaying`
+- `currentTrack`
+- `artwork`
+- `playbackSpeed`
 
-```swift
-@Published var isPlaying       // triggers update()
-@Published var currentTrack    // triggers update()
-@Published var artwork         // triggers update()
-@Published var playbackSpeed   // triggers update()
-```
-
-```
-Ã°Å¸â€Â´ DO NOT REMOVE these didSet triggers
-Ã°Å¸â€Â´ DO NOT ADD async operations inside didSet
-Ã°Å¸â€Â´ DO NOT CHANGE what triggers updates
-```
+DO NOT:
+- Remove these didSet triggers
+- Add async operations inside didSet
+- Change what triggers updates
 
 ---
 
 ### 3. InterruptionManager Observer Setup
 
-**Location:** `AudioPlayer.swift`, class `InterruptionManager`
+Location: `AudioPlayer.swift`, class `InterruptionManager`
 
 ```swift
 NotificationCenter.default.addObserver(
     self,
     selector: #selector(handleInterruption),
     name: AVAudioSession.interruptionNotification,
-    object: nil  // Ã¢â€ Â MUST BE nil, NOT session
+    object: nil  // MUST BE nil, NOT session
 )
 ```
 
-```
-Ã°Å¸â€Â´ object: nil is REQUIRED to catch Siri announcements
-Ã°Å¸â€Â´ DO NOT "fix" this to use AVAudioSession.sharedInstance()
-```
+DO NOT:
+- Change `object: nil` - required for Siri announcements
+- "Fix" this to use `AVAudioSession.sharedInstance()`
 
 ---
 
 ### 4. Initialization Order in ContentView.onAppear
 
-**Location:** `ContentView.swift`, lines ~97-116
+Location: `ContentView.swift`
 
-This order is required:
-1. `setupAudioSession()` Ã¢â‚¬â€ configures audio category
+Required order:
+1. `setupAudioSession()` - configures audio category
 2. Wire `LockScreenManager.shared` to both players
 3. Call `setupRemoteCommands()`
 4. Wire `InterruptionManager.shared` to both players
 5. Restore saved state
 
-```
-Ã°Å¸â€Â´ DO NOT reorder these operations
-Ã°Å¸â€Â´ DO NOT move player wiring to a later point
-Ã°Å¸â€Â´ DO NOT make wiring conditional
-```
+DO NOT:
+- Reorder these operations
+- Move player wiring to a later point
+- Make wiring conditional
 
 ---
 
 ### 5. AudioPlayer Safety Guards
 
-**Location:** `AudioPlayer.swift`, scattered
+Location: `AudioPlayer.swift`, scattered
 
-These prevent crashes with corrupted files and edge cases:
-
+Prevent crashes with corrupted files:
 ```swift
 // In duration/currentTime:
 guard result.isFinite && result >= 0 else { return 0 }
@@ -122,61 +110,70 @@ guard result.isFinite && result >= 0 else { return 0 }
 let remainingFrames = AVAudioFrameCount(min(remainingFramesInt64, Int64(UInt32.max)))
 
 // In play():
-if engine.isRunning { playerNode.play() }  // Guard against "player did not see an IO cycle"
+if engine.isRunning { playerNode.play() }
 ```
 
-```
-Ã°Å¸â€Â´ DO NOT REMOVE these guards
-Ã°Å¸â€Â´ DO NOT simplify "for performance"
-```
+DO NOT:
+- Remove these guards
+- Simplify "for performance"
 
 ---
 
-### 6. Chapter End Detection (playbackGeneration counter)
+### 6. Chapter End Detection (playbackGeneration + cooldown)
 
-**Location:** `AudioPlayer.swift`, `scheduleFileSegment()`
+Location: `AudioPlayer.swift`, `scheduleFileSegment()` and `handleChapterEnd()`
 
-M4B audiobooks use virtual chapters (same file, different time ranges). The `scheduleSegment` completion handler fires when audio finishes, but ALSO fires when you manually stop/seek. The `playbackGeneration` counter prevents cascade bugs:
+M4B audiobooks use virtual chapters (same file, different time ranges). `scheduleSegment` completion fires on finish AND on stop/seek. The generation counter prevents cascade bugs:
 
 ```swift
 private var playbackGeneration: Int = 0
+private var lastChapterTransitionTime: Date = .distantPast
 
-private func scheduleFileSegment(from startTime: Double, track: Track? = nil) {
-    playbackGeneration += 1  // Increment on every schedule
+private func scheduleFileSegment(...) {
+    playbackGeneration += 1
     let capturedGeneration = playbackGeneration
     
-    playerNode.scheduleSegment(...) { [weak self] in
-        // Only advance chapter if generation matches (not interrupted by seek/stop)
+    playerNode.scheduleSegment(...) {
         guard self?.playbackGeneration == capturedGeneration else { return }
         self?.handleChapterEnd()
     }
 }
 ```
 
+Cooldown: When seeking to chapter end, boundary observer fires, then time observer fires again (position still "hot"). Cooldown prevents double-advance:
+
+```swift
+func loadTrack(at index: Int) {
+    lastChapterTransitionTime = Date()
+}
+
+private func handleChapterEnd() {
+    guard Date().timeIntervalSince(lastChapterTransitionTime) > 1.0 else { return }
+}
 ```
-Ã°Å¸â€Â´ DO NOT REMOVE the generation counter
-Ã°Å¸â€Â´ DO NOT simplify to a boolean flag (timing issues)
-```
+
+DO NOT:
+- Remove generation counter
+- Remove cooldown timestamp check
+- Simplify to boolean flag (timing issues)
 
 ---
 
-### 7. Startup Auto-Play Suppression (isRestoringState flag)
+### 7. Startup Auto-Play Suppression (isRestoringState)
 
-**Location:** `AudioPlayer.swift`, `restoreState()` and `setupAVPlayer()`
+Location: `AudioPlayer.swift`, `restoreState()` and `setupAVPlayer()`
 
-The app restores saved playback state on launch but must NOT auto-play. HTTP streams and chapter files normally auto-play when ready, but this must be suppressed during state restoration.
+App restores saved state on launch but must NOT auto-play. HTTP streams and chapter files normally auto-play when ready - suppress during restoration.
 
 ```swift
 private var isRestoringState = false
 
 func restoreState(...) {
     isRestoringState = true  // Set BEFORE loading track
-    // ... load track ...
-    // Flag is cleared inside setupAVPlayer/loadLocalFile AFTER the auto-play check
 }
 
 private func setupAVPlayer(...) {
-    playerItemObserver = item.observe(\.status) { ... 
+    playerItemObserver = item.observe(\.status) { 
         if item.status == .readyToPlay {
             let shouldAutoPlay = !self.isRestoringState && (isHTTP || isLocalChapter)
             self.isRestoringState = false  // Clear AFTER check
@@ -186,388 +183,271 @@ private func setupAVPlayer(...) {
 }
 ```
 
-**Critical:** The flag is cleared **inside the observer callback**, not on a timer. HTTP streams can take seconds to bufferâ€”a timer-based approach will fail.
+Flag cleared inside observer callback, not on timer. HTTP streams can buffer for seconds.
 
-```
-ðŸ”´ DO NOT clear isRestoringState on a timer
-ðŸ”´ DO NOT move the flag clearing before the auto-play check
-ðŸ”´ DO NOT remove the flag from the AVAudioEngine path in loadLocalFile()
-```
+DO NOT:
+- Clear isRestoringState on a timer
+- Move flag clearing before auto-play check
+- Remove flag from AVAudioEngine path
 
 ---
 
-### 8. Saved Position Restoration Guard (isRestoringState for restoreSavedPosition)
+### 8. Saved Position Restoration Guard
 
-**Location:** `AudioPlayer.swift`, `setupAVPlayer()` and `loadLocalFile()`
+Location: `AudioPlayer.swift`, `setupAVPlayer()` and `loadLocalFile()`
 
-The `restoreSavedPosition()` function seeks to where the user last left off in a track. This must ONLY be called when `isRestoringState` is true (during app startup), NOT when the user manually selects a chapter. 
+`restoreSavedPosition()` seeks to last position. ONLY call when `isRestoringState` is true (app startup), NOT when user selects chapter.
 
-**Why this matters:** When playing through an audiobook, each chapter's end position gets saved. If `restoreSavedPosition()` is called unconditionally when selecting a chapter, it will seek to that saved position (usually the chapter's END), triggering immediate auto-advance to the next chapter. This creates a cascade where selecting chapter 12 instantly skips through 13, 14, 15... until reaching an unplayed chapter.
+Why: Each chapter's end position gets saved. Unconditional restore seeks to chapter END, triggering auto-advance cascade (selecting chapter 12 skips through 13, 14, 15...).
 
 ```swift
-// CORRECT: Only restore position during state restoration
+// CORRECT:
 if self.isRestoringState {
     self.restoreSavedPosition()
 }
-self.isRestoringState = false  // Clear flag after check
-
-// WRONG: Unconditionally restoring position
-self.restoreSavedPosition()  // Will skip to saved chapter end!
 self.isRestoringState = false
+
+// WRONG:
+self.restoreSavedPosition()  // Will skip to saved chapter end!
 ```
 
-This pattern must be followed in THREE places:
-1. `setupAVPlayer()` — chapter tracks path (inside seek completion handler)
-2. `setupAVPlayer()` — non-chapter tracks path  
-3. `loadLocalFile()` — AVAudioEngine/Boost mode path
+Pattern in THREE places:
+1. `setupAVPlayer()` - chapter tracks path (inside seek completion)
+2. `setupAVPlayer()` - non-chapter tracks path
+3. `loadLocalFile()` - AVAudioEngine/Boost mode path
 
+DO NOT:
+- Call restoreSavedPosition() without checking isRestoringState
+- Use playNow() when track already in queue (inserts duplicates)
+
+---
+
+### 9. BookManager Chapter Tracking (Combine observation)
+
+Location: `BookManager.swift`, `connectToSpeechPlayer()` and `handleChapterIndexChange()`
+
+Observes speech player via Combine publishers (NOT timers) to avoid UI conflicts.
+
+Key behaviors:
+- Auto-detects active book from restored queue on launch
+- Marks chapter played on natural advance (N to N+1 only)
+- Saves position on pause
+- Persists `activeBookId` to UserDefaults
+
+```swift
+// Connection in ContentView
+bookManager.connectToSpeechPlayer(speechPlayer)
+
+// Observation
+player.$currentIndex
+    .dropFirst()
+    .removeDuplicates()
+    .sink { newIndex in
+        self?.handleChapterIndexChange(to: newIndex)
+    }
 ```
-🔴 DO NOT call restoreSavedPosition() without checking isRestoringState first
-🔴 DO NOT use playNow() when track is already in queue (it inserts duplicates at index 0)
-🔴 If chapters are skipping on re-selection, check this guard FIRST
+
+Played detection:
+```swift
+if newIndex == oldIndex + 1 {
+    // Natural completion - mark played
+    playedChapterIDs.insert(oldChapterId)
+}
+// Manual skip does NOT mark played
 ```
+
+DO NOT:
+- Use Timer.publish - conflicts with SeekBarView's timer
+- Track percentage-based completion - requires timer, causes bugs
+
+REQUIRED: `activeBookId` must be set (by startPlayingBook or auto-detect)
+
+---
+
+### 10. SeekBarView Track Change Reset
+
+Location: `ContentView.swift`, SeekBarView usage
+
+When chapters advance, SeekBarView `@State` variables can get stuck. SwiftUI `.onChange` has timing issues with rapid changes.
+
+Solution: Use `.id()` to force view recreation:
+
+```swift
+SeekBarView(player: speechPlayer)
+    .id("\(speechPlayer.currentIndex)-\(speechPlayer.currentTrack?.id.uuidString ?? "none")")
+```
+
+When ID changes, SwiftUI destroys old view, creates fresh one with reset state.
+
+DO NOT:
+- Rely only on .onChange(of: player.currentTrack)
+- Omit currentIndex from .id() (needed for M4B chapter changes)
 
 ---
 
 ## ARTICLE EXTRACTION SYSTEM
 
-### Architecture Overview
+Two-stage pipeline:
+1. **Readability.js** (via WKWebView) - extracts clean HTML from messy pages
+2. **SwiftSoup** - parses HTML into plain text + formatting spans
 
-Articles use a **two-stage extraction pipeline**:
-
-1. **Readability.js** (via WKWebView) Ã¢â‚¬â€ Extracts clean article HTML from messy web pages
-2. **SwiftSoup** Ã¢â‚¬â€ Parses clean HTML into plain text + formatting spans
-
-This produces **TTS-synced rich text**: the plain text goes to TTSManager, formatting spans overlay visual styling without changing character indices.
+Produces TTS-synced rich text: plain text for TTSManager, spans overlay styling without changing indices.
 
 ### Dependencies
-
-```
-SwiftSoup - Swift Package (https://github.com/scinfu/SwiftSoup)
-Readability.js - Bundle resource (from https://github.com/mozilla/readability)
-```
+- SwiftSoup: Swift Package (github.com/scinfu/SwiftSoup)
+- Readability.js: Bundle resource (github.com/mozilla/readability)
 
 ### Key Files
-
 | File | Purpose |
 |------|---------|
-| `ArticleExtractor.swift` | WKWebView + Readability.js extraction, SwiftSoup parsing |
-| `ArticleManager.swift` | Article/ArticleChapter models, FormattingSpan, persistence |
-| `ArticleReaderView.swift` | Rich text display with TTS highlighting |
-| `DocumentImporter.swift` | Local file imports (ePub, PDF, HTML, TXT) |
+| ArticleExtractor.swift | WKWebView + Readability.js, SwiftSoup parsing |
+| ArticleManager.swift | Models, FormattingSpan, persistence |
+| ArticleReaderView.swift | Rich text display with TTS highlighting |
+| DocumentImporter.swift | Local file imports (ePub, PDF, HTML, TXT) |
 
 ### Data Models
-
 ```swift
 struct FormattingSpan: Codable {
     let location: Int      // Character index in plain text
     let length: Int
-    let style: FormattingStyle  // .bold, .italic, .link, .header1, etc.
+    let style: FormattingStyle
     let url: String?       // For links only
-}
-
-struct ArticleChapter: Codable {
-    let id: UUID
-    var title: String
-    var content: String                    // Plain text (TTS uses this)
-    var formattingSpans: [FormattingSpan]? // Visual formatting overlay
 }
 ```
 
 ### Critical: Index Alignment
 
-```
-Ã°Å¸â€Â´ FormattingSpan indices are CHARACTER positions in content string
-Ã°Å¸â€Â´ When applying to NSAttributedString, convert properly:
-   let startIdx = content.index(content.startIndex, offsetBy: span.location)
-   let endIdx = content.index(startIdx, offsetBy: span.length)
-   let range = NSRange(startIdx..<endIdx, in: content)
-Ã°Å¸â€Â´ DO NOT use span.location directly as NSRange Ã¢â‚¬â€ UTF-16 vs Character mismatch
-Ã°Å¸â€Â´ DO NOT modify content after spans are created Ã¢â‚¬â€ indices will be wrong
-```
-
-### Extraction Flow
-
-```
-URL Ã¢â€ â€™ WKWebView loads page
-    Ã¢â€ â€™ Readability.js extracts article HTML
-    Ã¢â€ â€™ SwiftSoup parses HTML
-    Ã¢â€ â€™ processNode() walks DOM, builds:
-        - plainText (appending text content)
-        - spans (tracking tag positions)
-    Ã¢â€ â€™ Article saved with content + formattingSpans
-```
-
-```
-Ã°Å¸â€Â´ DO NOT try to "clean" content after extraction Ã¢â‚¬â€ breaks span alignment
-Ã°Å¸â€Â´ DO NOT write custom regex HTML parsers Ã¢â‚¬â€ use SwiftSoup
-Ã°Å¸â€Â´ DO NOT skip Readability.js for web URLs Ã¢â‚¬â€ raw HTML has nav/ads/junk
-```
-
----
-
-## BEFORE YOU CODE: DECISION TREE
-
-### What are you trying to do?
-
-```
-Adding NEW CONTENT SOURCE (new API, new file type)?
-  Ã¢â€ â€™ See: PATTERN A below
-  Ã¢â€ â€™ Safe: Create new manager, new view
-  Ã¢â€ â€™ Safe: Wire to existing AudioPlayer
-  Ã¢â€ â€™ DANGER: Don't modify AudioPlayer.loadTrack()
-
-Adding UI to EXISTING VIEW?
-  Ã¢â€ â€™ Safe: Add buttons, lists, styling
-  Ã¢â€ â€™ Safe: Add new sheets/navigation
-  Ã¢â€ â€™ DANGER: Don't add playback logic in views
-
-Adding PLAYBACK FEATURE (speed, effects, queue)?
-  Ã¢â€ â€™ Check: Does it need lock screen display? Ã¢â€ â€™ Talk to user first
-  Ã¢â€ â€™ Safe: Add to AudioPlayer methods
-  Ã¢â€ â€™ DANGER: Don't modify @Published didSet triggers
-
-Adding PERSISTENCE (new data to save)?
-  Ã¢â€ â€™ See: PATTERN B below  
-  Ã¢â€ â€™ Safe: New UserDefaults keys
-  Ã¢â€ â€™ DANGER: Don't change existing key names
-
-Fixing a BUG?
-  Ã¢â€ â€™ Check: Is it in the "7 things" above? Ã¢â€ â€™ Talk to user first
-  Ã¢â€ â€™ Safe: Add guards, nil checks, fallbacks
-  Ã¢â€ â€™ DANGER: Don't "simplify" working code
-
-Touching LOCK SCREEN behavior?
-  Ã¢â€ â€™ Ã°Å¸â€ºâ€˜ STOP. Tell the user. This is the #1 regression source.
-
-Modifying ARTICLE EXTRACTION?
-  Ã¢â€ â€™ Safe: Add new FormattingStyle cases
-  Ã¢â€ â€™ Safe: Improve SwiftSoup node handling
-  Ã¢â€ â€™ DANGER: Don't modify content string after spans created
-  Ã¢â€ â€™ DANGER: Don't skip Readability.js for web content
-```
-
----
-
-## AUDIO MODE: QUALITY vs BOOST
-
-**Location:** `AudioPlayer.swift`, `audioMode` property
-
-The speech player has a toggle between two audio engines:
-
-| Mode | Engine | Speed Quality | Voice Boost | Use Case |
-|------|--------|---------------|-------------|----------|
-| **Quality** | AVPlayer | Excellent (Apple's algorithm) | Ã¢ÂÅ’ Not available | Default. Sounds natural at 1.5x+ |
-| **Boost** | AVAudioEngine | Robotic at high speeds | Ã¢Å“â€¦ Works | Quiet audiobooks, noisy environments |
-
+FormattingSpan indices are CHARACTER positions in content string. When applying to NSAttributedString:
 ```swift
-enum AudioMode: String, CaseIterable {
-    case quality = "Quality"
-    case boost = "Boost"
-}
-
-@Published var audioMode: AudioMode = .quality {
-    didSet {
-        // Automatically enables/disables boost
-        isBoostEnabled = (audioMode == .boost)
-        // Reloads current track with new engine
-        // Persists to UserDefaults
-    }
-}
+let startIdx = content.index(content.startIndex, offsetBy: span.location)
+let endIdx = content.index(startIdx, offsetBy: span.length)
+let range = NSRange(startIdx..<endIdx, in: content)
 ```
 
-**UI:** Segmented toggle in ContentView speech panel header: `[Quality | Boost]`
-
-```
-Ã°Å¸â€Â´ DO NOT remove the mode toggle without discussing
-Ã°Å¸â€Â´ DO NOT force one engine for all content types
-```
+DO NOT:
+- Use span.location directly as NSRange (UTF-16 vs Character mismatch)
+- Modify content after spans created (indices will be wrong)
+- Skip Readability.js for web URLs (raw HTML has nav/ads/junk)
+- Write custom regex HTML parsers (use SwiftSoup)
 
 ---
 
-## ENGINE SELECTION (AudioPlayer)
+## ADDING NEW FEATURES - DECISION TREE
 
-Engine selection depends on **content type** AND **audio mode**:
+**Adding NEW CONTENT SOURCE?**
+- Safe: Create new manager, new view, wire to existing AudioPlayer
+- DANGER: Don't modify AudioPlayer.loadTrack()
 
-| Content Type | Quality Mode | Boost Mode |
-|--------------|--------------|------------|
-| `ipod-library://...` | AVPlayer | AVPlayer (Apple requires it) |
-| `http://...` streams | AVPlayer | AVPlayer (streaming needs buffering) |
-| Local files (.mp3, .m4b, etc.) | AVPlayer | AVAudioEngine |
+**Adding UI to EXISTING VIEW?**
+- Safe: Buttons, lists, styling, sheets, navigation
+- DANGER: Don't add playback logic in views
 
-**Location:** `AudioPlayer.swift`, `loadLocalFile()`
+**Adding PLAYBACK FEATURE?**
+- Check: Needs lock screen display? Talk to user first
+- Safe: Add to AudioPlayer methods
+- DANGER: Don't modify @Published didSet triggers
 
-```swift
-private func loadLocalFile(track: Track) {
-    if audioMode == .quality {
-        // Use AVPlayer for better speed algorithm
-        isUsingEngine = false
-        setupAVPlayer(with: AVPlayerItem(asset: asset), track: track)
-    } else {
-        // Use AVAudioEngine for boost capability
-        isUsingEngine = true
-        // ... engine setup ...
-    }
-}
-```
+**Adding PERSISTENCE?**
+- Safe: New UserDefaults keys
+- DANGER: Don't change existing key names
 
-```
-Ã°Å¸â€Â´ DO NOT modify this logic without understanding both paths
-Ã°Å¸â€Â´ DO NOT remove the audioMode check
-```
+**Fixing a BUG?**
+- Check: In the "10 critical systems"? Talk to user first
+- Safe: Add guards, nil checks, fallbacks
+- DANGER: Don't "simplify" working code
 
----
+**Touching LOCK SCREEN?**
+- STOP. Tell the user. This is the #1 regression source.
 
-## M4B AUDIOBOOK SUPPORT
-
-### Virtual Chapters
-
-M4B files are single audio files with embedded chapter markers. Each "chapter" is a Track with:
-
-```swift
-struct Track {
-    let id: UUID
-    let title: String
-    let artist: String
-    let filename: String      // Same file for all chapters
-    let startTime: Double?    // Chapter start in seconds
-    let endTime: Double?      // Chapter end in seconds
-    
-    var hasChapterBoundaries: Bool {
-        startTime != nil && endTime != nil
-    }
-}
-```
+**Modifying ARTICLE EXTRACTION?**
+- Safe: Add FormattingStyle cases, improve SwiftSoup handling
+- DANGER: Don't modify content after spans, don't skip Readability.js
 
 ---
 
 ## PATTERN A: Adding New Content Source
 
-### 1. Create a new Manager (singleton or @StateObject)
-
+### 1. Create manager class
 ```swift
-class MyNewManager: ObservableObject {
-    static let shared = MyNewManager()  // If singleton
-    @Published var items: [MyItem] = []
-    // ... fetch, parse, persist ...
+class NewSourceManager: ObservableObject {
+    static let shared = NewSourceManager()
+    @Published var items: [NewItem] = []
+    private let storageKey = "newSourceItems"
+    // Load, save, fetch methods
 }
 ```
 
-### 2. Create a new View
-
+### 2. Create view
 ```swift
-struct MyNewSearchView: View {
-    @StateObject private var manager = MyNewManager()
-    // OR for singleton:
-    @ObservedObject private var manager = MyNewManager.shared
+struct NewSourceView: View {
+    @ObservedObject var manager = NewSourceManager.shared
+    let player: AudioPlayer
+    // UI that calls player.playNow() or player.addTrackToQueue()
 }
 ```
 
-### 3. Wire playback to existing AudioPlayer
+### 3. Wire in ContentView
+Add sheet presentation, tab, or navigation link.
 
+### 4. Convert to Track
 ```swift
-// In your view, receive the player from ContentView
-let speechPlayer: AudioPlayer  // passed in
-
-// Load a track
-let track = Track(id: UUID(), title: "...", artist: "...", filename: localPath)
-speechPlayer.loadTrack(track)
-speechPlayer.play()
+let track = Track(
+    title: item.title,
+    artist: item.source,
+    filename: item.streamURL  // or local filename
+)
+player.playNow(track, artworkURL: item.imageURL)
 ```
 
 ---
 
-## PATTERN B: Adding New Persisted Data
+## PATTERN B: Adding Persisted Data
 
-### 1. Choose a unique key
-
+### 1. Add UserDefaults key (unique, not reusing existing)
 ```swift
-private let myDataKey = "myFeature_dataName"  // Namespaced to avoid collision
+private let newFeatureKey = "newFeatureData"
 ```
 
-### 2. Use standard encode/decode
-
+### 2. Add load method
 ```swift
-func saveData() {
-    if let encoded = try? JSONEncoder().encode(myData) {
-        UserDefaults.standard.set(encoded, forKey: myDataKey)
+func loadNewFeatureData() {
+    if let data = UserDefaults.standard.data(forKey: newFeatureKey),
+       let decoded = try? JSONDecoder().decode([NewFeature].self, from: data) {
+        newFeatureData = decoded
     }
-}
-
-func loadData() {
-    if let data = UserDefaults.standard.data(forKey: myDataKey),
-       let decoded = try? JSONDecoder().decode(MyType.self, from: data) {
-        myData = decoded
-    }
-}
-```
-
-### 3. Load lazily, save immediately
-
-```swift
-func loadIfNeeded() {
-    guard !isLoaded else { return }
-    loadData()
-    isLoaded = true
-}
-
-// Call saveData() immediately after any mutation
-```
-
----
-
-## PATTERN C: Adding to Existing Manager
-
-If you're adding a feature to BookManager, PodcastSearchManager, etc.:
-
-### 1. Add @Published property if UI needs to react
-
-```swift
-@Published var newFeatureData: [String] = []
-```
-
-### 2. Add persistence in init or loadIfNeeded
-
-```swift
-func loadIfNeeded() {
-    guard !isLoaded else { return }
-    loadExistingStuff()
-    loadNewFeatureData()  // Ã¢â€ Â Add here
-    isLoaded = true
 }
 ```
 
 ### 3. Add save method, call after mutations
-
 ```swift
 func updateNewFeature(_ value: String) {
     newFeatureData.append(value)
-    saveNewFeatureData()  // Ã¢â€ Â Immediate save
+    saveNewFeatureData()
 }
 ```
 
 ---
 
-## EXISTING MANAGERS QUICK REFERENCE
+## MANAGERS REFERENCE
 
-| Manager | Type | Plays On | Key Responsibility |
-|---------|------|----------|-------------------|
-| `AudioPlayer` | @StateObject (x2) | - | Actual playback engine |
-| `MusicLibraryManager` | @StateObject | musicPlayer | Apple Music library access |
-| `BookManager.shared` | Singleton | speechPlayer | Audiobooks (LibriVox + M4B uploads) |
-| `PodcastSearchManager` | @StateObject | speechPlayer | iTunes podcast search + RSS |
-| `DownloadManager.shared` | Singleton | - | Podcast episode downloads |
-| `ArticleManager.shared` | Singleton | TTSManager | Web articles + documents |
-| `ArticleExtractor` | Static methods | - | Web article extraction (Readability + SwiftSoup) |
-| `RadioBrowserAPI` | @StateObject | musicPlayer | Radio station search |
-| `TTSManager.shared` | Singleton | - | Text-to-speech for articles |
-| `ImageCache.shared` | Singleton | - | Artwork caching |
+| Manager | Type | Player | Purpose |
+|---------|------|--------|---------|
+| AudioPlayer | @StateObject (x2) | - | Playback engine |
+| MusicLibraryManager | @StateObject | music | Apple Music library |
+| BookManager.shared | Singleton | speech | Audiobooks (LibriVox + M4B) |
+| PodcastSearchManager | @StateObject | speech | Podcast search + RSS |
+| DownloadManager.shared | Singleton | - | Podcast downloads |
+| ArticleManager.shared | Singleton | TTS | Articles + documents |
+| ArticleExtractor | Static | - | Web extraction |
+| RadioBrowserAPI | @StateObject | music | Radio search |
+| TTSManager.shared | Singleton | - | Text-to-speech |
+| ImageCache.shared | Singleton | - | Artwork caching |
 
 ---
 
-## AUDIO SESSION CONFIGURATION
+## AUDIO SESSION
 
-**Location:** `ContentView.swift`, `setupAudioSession()`
+Location: `ContentView.swift`, `setupAudioSession()`
 
 ```swift
 try session.setCategory(.playback, mode: .spokenAudio, 
@@ -575,42 +455,37 @@ try session.setCategory(.playback, mode: .spokenAudio,
 try session.setActive(true, options: .notifyOthersOnDeactivation)
 ```
 
-```
-Ã°Å¸â€Â´ DO NOT change .playback category (breaks background audio)
-Ã°Å¸â€Â´ DO NOT remove Bluetooth options (breaks AirPods)
-Ã°Å¸â€Â´ DO NOT remove .notifyOthersOnDeactivation (breaks other apps)
-```
+DO NOT:
+- Change .playback category (breaks background audio)
+- Remove Bluetooth options (breaks AirPods)
+- Remove .notifyOthersOnDeactivation (breaks other apps)
 
 ---
 
 ## DATA MODELS
 
-### Track (used everywhere)
-
+### Track
 ```swift
 struct Track: Identifiable, Codable, Equatable, Hashable {
     let id: UUID
     let title: String
     let artist: String
-    let filename: String      // Local filename, ipod-library://, or http(s)://
-    let startTime: Double?    // For M4B chapters: start time in seconds
-    let endTime: Double?      // For M4B chapters: end time in seconds
+    let filename: String      // Local, ipod-library://, or http(s)://
+    let startTime: Double?    // M4B chapter start
+    let endTime: Double?      // M4B chapter end
     
-    var hasChapterBoundaries: Bool {
-        startTime != nil && endTime != nil
-    }
+    var hasChapterBoundaries: Bool { startTime != nil && endTime != nil }
 }
 ```
 
 ### Book
-
 ```swift
 struct Book {
     var id: UUID
     let title: String
     var author: String?
-    var chapters: [Track]              // Downloaded chapters OR M4B virtual chapters
-    var librivoxChapters: [LibriVoxChapter]?  // All available (LibriVox only)
+    var chapters: [Track]
+    var librivoxChapters: [LibriVoxChapter]?
     var coverArtUrl: URL?
     var currentChapterIndex: Int
     var lastPlayedPosition: Double
@@ -619,14 +494,12 @@ struct Book {
 ```
 
 ### Article
-
 ```swift
 struct Article {
     let id: UUID
     var title: String
     var source: String
     var sourceURL: URL?
-    var author: String?
     var chapters: [ArticleChapter]
     var lastReadChapter: Int
     var lastReadPosition: Int
@@ -636,7 +509,7 @@ struct ArticleChapter {
     let id: UUID
     var title: String
     var content: String                    // Plain text for TTS
-    var formattingSpans: [FormattingSpan]? // Rich formatting overlay
+    var formattingSpans: [FormattingSpan]?
 }
 ```
 
@@ -648,11 +521,12 @@ struct ArticleChapter {
 playbackState_Music          - AudioPlayer
 playbackState_Speech         - AudioPlayer
 playbackPositions            - AudioPlayer
-audioMode_Music              - AudioPlayer (Quality/Boost mode)
-audioMode_Speech             - AudioPlayer (Quality/Boost mode)
+audioMode_Music              - AudioPlayer
+audioMode_Speech             - AudioPlayer
 savedBooks                   - BookManager
 cachedDurations              - BookManager
 playedChapters               - BookManager
+activeBookId                 - BookManager
 favoritePodcasts             - PodcastSearchManager
 playedEpisodeURLs            - PodcastSearchManager
 downloadedEpisodes           - DownloadManager
@@ -665,59 +539,69 @@ favoriteRadioStations        - RadioBrowserAPI
 
 ---
 
-## TEST CHECKLIST (Manual Verification)
+## TEST CHECKLIST
 
 After ANY change, verify:
 
 ### Lock Screen / Controls
-- [ ] Play music only Ã¢â€ â€™ lock screen shows music info + artwork
-- [ ] Play speech only Ã¢â€ â€™ lock screen shows speech info + artwork
-- [ ] Play BOTH Ã¢â€ â€™ lock screen shows combined title + app logo
-- [ ] Pause while both playing Ã¢â€ â€™ still shows combined info + app logo
-- [ ] Pause music only Ã¢â€ â€™ shows music info
-- [ ] Pause speech only Ã¢â€ â€™ shows speech info
+- [ ] Play music only - shows music info + artwork
+- [ ] Play speech only - shows speech info + artwork
+- [ ] Play BOTH - shows combined title + app logo
+- [ ] Pause while both playing - still shows combined info
+- [ ] Pause music only - shows music info
+- [ ] Pause speech only - shows speech info
 
 ### AirPods / Interruptions
-- [ ] Tap AirPods while both playing Ã¢â€ â€™ both pause
-- [ ] Tap AirPods again Ã¢â€ â€™ both resume
-- [ ] Phone call Ã¢â€ â€™ pauses, resumes after
-- [ ] Siri announcement Ã¢â€ â€™ pauses, resumes after
-- [ ] Unplug headphones Ã¢â€ â€™ both pause
+- [ ] Tap AirPods while both playing - both pause
+- [ ] Tap again - both resume
+- [ ] Phone call - pauses, resumes after
+- [ ] Siri announcement - pauses, resumes after
+- [ ] Unplug headphones - both pause
 
 ### Persistence
-- [ ] Kill app, reopen Ã¢â€ â€™ state restored (paused)
-- [ ] Kill app with radio playing, reopen â†’ radio loaded but NOT auto-playing
-- [ ] Kill app with audiobook playing, reopen â†’ audiobook loaded but NOT auto-playing
-- [ ] After restore, tap radio station â†’ auto-plays (user action works)
-- [ ] Background for 5 min Ã¢â€ â€™ still works when foregrounded
-- [ ] Audio mode persists across app restarts
+- [ ] Kill app, reopen - state restored (paused)
+- [ ] Kill with radio playing, reopen - loaded but NOT auto-playing
+- [ ] Kill with audiobook playing, reopen - loaded but NOT auto-playing
+- [ ] After restore, tap station - auto-plays
+- [ ] Background 5 min - still works when foregrounded
+- [ ] Audio mode persists across restarts
 
 ### M4B Audiobooks
-- [ ] Import M4B Ã¢â€ â€™ chapters detected
-- [ ] Play chapter Ã¢â€ â€™ starts at correct time
-- [ ] Chapter ends Ã¢â€ â€™ auto-advances to next
-- [ ] Seek within chapter Ã¢â€ â€™ stays in chapter bounds
-- [ ] Quality/Boost toggle Ã¢â€ â€™ reloads with correct engine
+- [ ] Import M4B - chapters detected
+- [ ] Play chapter - starts at correct time
+- [ ] Chapter ends - auto-advances to next
+- [ ] Seek within chapter - stays in bounds
+- [ ] Quality/Boost toggle - reloads correctly
+- [ ] Seek to chapter end - advances once (not multiple)
+- [ ] Seek bar resets after chapter advance
 
-### Articles (Rich Text)
-- [ ] Share URL from Safari Ã¢â€ â€™ article extracted with formatting
-- [ ] Bold/italic text displays correctly
-- [ ] Links are purple and tappable Ã¢â€ â€™ opens Safari
-- [ ] TTS highlighting syncs with displayed text
-- [ ] Tap word to seek Ã¢â€ â€™ TTS jumps to that position
+### Audiobook Tracking
+- [ ] Chapter naturally ends - marked played in list
+- [ ] Tap "next" to skip - NOT marked played
+- [ ] Pause mid-chapter, kill app, reopen - Resume shows correct position
+- [ ] Swipe left on chapter - can toggle played status
+- [ ] "Mark All Played" - all marked
+- [ ] "Mark All Unplayed" - all unmarked, resume resets
+
+### Articles
+- [ ] Share URL from Safari - extracted with formatting
+- [ ] Bold/italic displays correctly
+- [ ] Links tappable, open Safari
+- [ ] TTS highlighting syncs
+- [ ] Tap word to seek - TTS jumps
 
 ---
 
-## WHEN TO TALK TO THE USER INSTEAD OF CODING
+## WHEN TO TALK TO USER FIRST
 
-1. **Any change to LockScreenManager.update()** Ã¢â‚¬â€ Always discuss first
-2. **Any change to the "7 things that will break the app"** Ã¢â‚¬â€ Always discuss first
-3. **Adding lock screen features** (scrubbing, per-player controls) Ã¢â‚¬â€ Discuss architecture
-4. **Changing persistence keys** Ã¢â‚¬â€ Need migration strategy
-5. **Changing audio session configuration** Ã¢â‚¬â€ High risk of breaking background audio
-6. **"Simplifying" or "cleaning up" working code** Ã¢â‚¬â€ If it works, leave it alone
-7. **Adding new state tracking to LockScreenManager** Ã¢â‚¬â€ The boolean flags are correct, don't add complexity
-8. **Rewriting article extraction** Ã¢â‚¬â€ Current system uses battle-tested libraries (Readability.js, SwiftSoup)
+1. Any change to LockScreenManager.update()
+2. Any change to the 10 critical systems
+3. Adding lock screen features
+4. Changing persistence keys
+5. Changing audio session config
+6. "Simplifying" working code
+7. Adding state tracking to LockScreenManager
+8. Rewriting article extraction
 
 ---
 
@@ -725,22 +609,22 @@ After ANY change, verify:
 
 | File | Contains |
 |------|----------|
-| `AudioPlayer.swift` | AudioPlayer, LockScreenManager, InterruptionManager |
-| `ContentView.swift` | Main view, initialization, sheet presentations, mode toggles |
-| `BookManager.swift` | Book, LibriVoxChapter, BookManager, LibriVoxDownloadManager |
-| `BookLibraryView.swift` | M4BChapterReader, file import UI |
-| `MP4ChapterParser.swift` | Direct MP4/M4B binary chapter parsing |
-| `PodcastSearchManager.swift` | Podcast, Episode, PodcastSearchManager, RSSParser |
-| `DownloadManager.swift` | DownloadManager, episode download logic |
-| `ArticleManager.swift` | Article, ArticleChapter, FormattingSpan, FormattingStyle |
-| `ArticleExtractor.swift` | Readability.js + SwiftSoup extraction pipeline |
-| `ArticleReaderView.swift` | Rich text display, TTS sync, RichTextReaderView |
-| `ArticleLibraryView.swift` | Article list, add URL/text UI |
-| `DocumentImporter.swift` | ePub, PDF, HTML, TXT import (uses ArticleExtractor for HTML) |
-| `MusicLibraryManager.swift` | Apple Music library access |
-| `RadioBrowserAPI.swift` | RadioStation, RadioBrowserAPI |
-| `TTSManager.swift` | Text-to-speech with word highlighting |
-| `ImageCache.swift` | Two-tier image caching |
-| `SharedComponents.swift` | Reusable UI components (Glass* views) |
-| `Track.swift` | Track model with chapter boundary support |
-| `Readability.js` | Mozilla's article extraction (bundle resource, not Swift) |
+| AudioPlayer.swift | AudioPlayer, LockScreenManager, InterruptionManager |
+| ContentView.swift | Main view, init, sheets, mode toggles |
+| BookManager.swift | Book, LibriVoxChapter, BookManager, LibriVoxDownloadManager |
+| BookLibraryView.swift | M4BChapterReader, file import UI |
+| MP4ChapterParser.swift | MP4/M4B binary chapter parsing |
+| PodcastSearchManager.swift | Podcast, Episode, PodcastSearchManager, RSSParser |
+| DownloadManager.swift | Episode download logic |
+| ArticleManager.swift | Article, ArticleChapter, FormattingSpan |
+| ArticleExtractor.swift | Readability.js + SwiftSoup pipeline |
+| ArticleReaderView.swift | Rich text display, TTS sync |
+| ArticleLibraryView.swift | Article list, add URL/text UI |
+| DocumentImporter.swift | ePub, PDF, HTML, TXT import |
+| MusicLibraryManager.swift | Apple Music library access |
+| RadioBrowserAPI.swift | RadioStation, RadioBrowserAPI |
+| TTSManager.swift | Text-to-speech with highlighting |
+| ImageCache.swift | Two-tier image caching |
+| SharedComponents.swift | Reusable UI (Glass* views) |
+| Track.swift | Track model with chapter support |
+| Readability.js | Mozilla article extraction (bundle resource) |

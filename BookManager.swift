@@ -1,9 +1,12 @@
 //
 //  BookManager.swift
-//  2 Music 2 Furious - MILESTONE 14.5
+//  2 Music 2 Furious - MILESTONE 15
 //
 //  Shared Models, Download Logic, and Book Management
-//  UPDATED: Added Played Chapter Tracking (Persistent)
+//  UPDATED: Smart Played Status Tracking for M4B Audiobooks
+//    - Auto-marks chapters as played when they naturally end
+//    - Tracks resume position per-book (survives app restart)
+//    - Bulk mark all played/unplayed
 //
 
 import Foundation
@@ -143,18 +146,26 @@ class BookManager: ObservableObject {
     @Published var isLoaded = false
     @Published var calculatedDurations: [String: String] = [:]
     
-    // NEW: Played Status Tracking
+    // MARK: - Played Status Tracking
     @Published var playedChapterIDs: Set<String> = []
+    
+    // MARK: - Active Book Tracking
+    @Published var activeBookId: UUID? = nil
+    private var lastKnownChapterIndex: Int = -1
+    
+    // Combine subscriptions
+    private var cancellables = Set<AnyCancellable>()
+    private weak var speechPlayer: AudioPlayer?
     
     private let userDefaults = UserDefaults.standard
     private let booksKey = "savedBooks"
     private let durationsKey = "cachedDurations"
-    private let playedChaptersKey = "playedChapters" // Persistence Key
+    private let playedChaptersKey = "playedChapters"
+    private let activeBookKey = "activeBookId"
     private let calculationQueue = DispatchQueue(label: "durationCalculation", qos: .utility)
     
     init() {
         if let cached = userDefaults.dictionary(forKey: durationsKey) as? [String: String] { calculatedDurations = cached }
-        // Played status loaded in loadIfNeeded
     }
     
     func loadIfNeeded() {
@@ -167,7 +178,203 @@ class BookManager: ObservableObject {
             playedChapterIDs = decoded
         }
         
+        // Restore Active Book ID
+        if let idString = userDefaults.string(forKey: activeBookKey),
+           let uuid = UUID(uuidString: idString) {
+            activeBookId = uuid
+            print("📖 Restored active book: \(uuid)")
+        }
+        
         isLoaded = true
+    }
+    
+    // MARK: - Speech Player Connection
+    
+    func connectToSpeechPlayer(_ player: AudioPlayer) {
+        self.speechPlayer = player
+        
+        // Observe currentIndex changes
+        player.$currentIndex
+            .dropFirst()
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] newIndex in
+                self?.handleChapterIndexChange(to: newIndex)
+            }
+            .store(in: &cancellables)
+        
+        // Observe isPlaying to save position on pause
+        player.$isPlaying
+            .dropFirst()
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] isPlaying in
+                guard let self = self, self.activeBookId != nil else { return }
+                if !isPlaying {
+                    self.saveCurrentPlaybackState()
+                }
+            }
+            .store(in: &cancellables)
+        
+        // Auto-detect book from restored queue
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            self?.detectActiveBookFromQueue(player)
+        }
+        
+        print("📖 BookManager connected to speech player")
+    }
+    
+    /// Try to detect if the current queue belongs to a book
+    private func detectActiveBookFromQueue(_ player: AudioPlayer) {
+        loadIfNeeded()
+        
+        // If we already have an active book set, verify it's still valid
+        if let bookId = activeBookId {
+            if books.contains(where: { $0.id == bookId }) {
+                // Update tracking state
+                lastKnownChapterIndex = player.currentIndex
+                print("📖 Active book verified: \(bookId), chapter \(player.currentIndex)")
+                return
+            } else {
+                // Book was deleted, clear active
+                activeBookId = nil
+            }
+        }
+        
+        // Try to find a book that matches the current queue
+        guard let currentTrack = player.currentTrack else { return }
+        
+        for book in books {
+            // Check if current track matches any chapter in this book
+            if book.chapters.contains(where: { $0.filename == currentTrack.filename }) {
+                activeBookId = book.id
+                lastKnownChapterIndex = player.currentIndex
+                saveActiveBookId()
+                print("📖 Auto-detected book: \(book.displayTitle), chapter \(player.currentIndex)")
+                return
+            }
+        }
+    }
+    
+    // MARK: - Book Playback Control
+    
+    func startPlayingBook(_ book: Book, at chapterIndex: Int) {
+        loadIfNeeded()
+        
+        print("📖 Starting book: \(book.displayTitle), chapter \(chapterIndex)")
+        
+        activeBookId = book.id
+        lastKnownChapterIndex = chapterIndex
+        
+        // Update book's current chapter
+        if let bookIndex = books.firstIndex(where: { $0.id == book.id }) {
+            books[bookIndex].currentChapterIndex = chapterIndex
+            saveBooks()
+        }
+        
+        saveActiveBookId()
+    }
+    
+    func stopPlayingBook() {
+        guard activeBookId != nil else { return }
+        
+        print("📖 Stopping book tracking")
+        saveCurrentPlaybackState()
+        
+        activeBookId = nil
+        lastKnownChapterIndex = -1
+        
+        saveActiveBookId()
+    }
+    
+    func getResumeInfo(for book: Book) -> (chapterIndex: Int, position: Double) {
+        loadIfNeeded()
+        
+        let chapterIndex = min(book.currentChapterIndex, max(0, book.chapters.count - 1))
+        let position = book.lastPlayedPosition
+        
+        return (chapterIndex, position)
+    }
+    
+    func getFirstUnplayedChapter(for book: Book) -> Int {
+        loadIfNeeded()
+        
+        for (index, track) in book.chapters.enumerated() {
+            let chapterId = track.hasChapterBoundaries ? track.id.uuidString : track.filename
+            if !playedChapterIDs.contains(chapterId) {
+                return index
+            }
+        }
+        return max(0, book.chapters.count - 1)
+    }
+    
+    // MARK: - Chapter Change Handling
+    
+    private func handleChapterIndexChange(to newIndex: Int) {
+        guard let bookId = activeBookId,
+              let bookIndex = books.firstIndex(where: { $0.id == bookId }) else {
+            // Try to detect book if not set
+            if let player = speechPlayer {
+                detectActiveBookFromQueue(player)
+            }
+            return
+        }
+        
+        let book = books[bookIndex]
+        let oldIndex = lastKnownChapterIndex
+        
+        // Skip if not tracking yet or same index
+        guard oldIndex >= 0 && newIndex != oldIndex else {
+            lastKnownChapterIndex = newIndex
+            return
+        }
+        
+        print("📖 Chapter: \(oldIndex) → \(newIndex)")
+        
+        // If we advanced forward by 1, the previous chapter naturally ended
+        // Mark it as played
+        if newIndex == oldIndex + 1 && oldIndex >= 0 && oldIndex < book.chapters.count {
+            let oldTrack = book.chapters[oldIndex]
+            let chapterId = oldTrack.hasChapterBoundaries ? oldTrack.id.uuidString : oldTrack.filename
+            
+            if !playedChapterIDs.contains(chapterId) {
+                playedChapterIDs.insert(chapterId)
+                savePlayedStatus()
+                print("📖 ✓ Marked chapter \(oldIndex) as played (natural end)")
+            }
+        }
+        
+        // Update tracking
+        lastKnownChapterIndex = newIndex
+        
+        // Update book state
+        books[bookIndex].currentChapterIndex = newIndex
+        books[bookIndex].lastPlayedPosition = 0
+        saveBooks()
+    }
+    
+    private func saveCurrentPlaybackState() {
+        guard let player = speechPlayer,
+              let bookId = activeBookId,
+              let bookIndex = books.firstIndex(where: { $0.id == bookId }) else { return }
+        
+        let position = player.currentTime
+        let index = player.currentIndex
+        
+        books[bookIndex].currentChapterIndex = index
+        books[bookIndex].lastPlayedPosition = position
+        lastKnownChapterIndex = index
+        saveBooks()
+        
+        print("📖 Saved: chapter \(index), position \(String(format: "%.1f", position))")
+    }
+    
+    private func saveActiveBookId() {
+        if let id = activeBookId {
+            userDefaults.set(id.uuidString, forKey: activeBookKey)
+        } else {
+            userDefaults.removeObject(forKey: activeBookKey)
+        }
     }
     
     // MARK: - Played Status Logic
@@ -183,6 +390,48 @@ class BookManager: ObservableObject {
     
     func isPlayed(chapterId: String) -> Bool {
         return playedChapterIDs.contains(chapterId)
+    }
+    
+    func markChapterPlayed(_ track: Track) {
+        let chapterId = track.hasChapterBoundaries ? track.id.uuidString : track.filename
+        if !playedChapterIDs.contains(chapterId) {
+            playedChapterIDs.insert(chapterId)
+            savePlayedStatus()
+        }
+    }
+    
+    // MARK: - Bulk Mark Operations
+    
+    func markAllPlayed(for book: Book) {
+        loadIfNeeded()
+        for track in book.chapters {
+            let chapterId = track.hasChapterBoundaries ? track.id.uuidString : track.filename
+            playedChapterIDs.insert(chapterId)
+        }
+        savePlayedStatus()
+    }
+    
+    func markAllUnplayed(for book: Book) {
+        loadIfNeeded()
+        for track in book.chapters {
+            let chapterId = track.hasChapterBoundaries ? track.id.uuidString : track.filename
+            playedChapterIDs.remove(chapterId)
+        }
+        if let bookIndex = books.firstIndex(where: { $0.id == book.id }) {
+            books[bookIndex].currentChapterIndex = 0
+            books[bookIndex].lastPlayedPosition = 0
+            saveBooks()
+        }
+        savePlayedStatus()
+    }
+    
+    func playedChapterCount(for book: Book) -> Int {
+        var count = 0
+        for track in book.chapters {
+            let chapterId = track.hasChapterBoundaries ? track.id.uuidString : track.filename
+            if playedChapterIDs.contains(chapterId) { count += 1 }
+        }
+        return count
     }
     
     private func savePlayedStatus() {
@@ -281,6 +530,15 @@ class BookManager: ObservableObject {
         for chapter in book.chapters {
             try? fm.removeItem(at: docs.appendingPathComponent(chapter.filename))
             calculatedDurations.removeValue(forKey: chapter.filename)
+        }
+        for track in book.chapters {
+            let chapterId = track.hasChapterBoundaries ? track.id.uuidString : track.filename
+            playedChapterIDs.remove(chapterId)
+        }
+        savePlayedStatus()
+        if activeBookId == book.id {
+            activeBookId = nil
+            saveActiveBookId()
         }
         books.removeAll { $0.id == book.id }
         saveBooks()
