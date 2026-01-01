@@ -3,14 +3,18 @@
 //  2 Music 2 Furious
 //
 //  Full-screen article reader with text-to-speech
-//  Fixed:
-//  - "Half Word" highlighting bug (Text/TTS Synchronization)
-//  - Word Snapping for cleaner visuals
-//  - Scroll, Buttons, and Layout fully working
+//  RICH TEXT UPDATE: Applies FormattingSpans for Instapaper-style reading
+//  
+//  Key Features:
+//  - Rich formatting (bold, italic, headers, blockquotes, links)
+//  - TTS sync preserved (plain text indices match display)
+//  - Tappable links open in Safari
+//  - Word highlighting during playback
 //
 
 import SwiftUI
 import AVFoundation
+import UIKit
 
 struct ArticleReaderView: View {
     let article: Article
@@ -35,13 +39,24 @@ struct ArticleReaderView: View {
         return article.chapters[currentChapterIndex]
     }
     
-    // CRITICAL FIX: Centralized Content Cleaning
-    // We must use EXACTLY the same string for both the Visual Text and the TTS Engine.
-    // If we clean one but not the other, the character indices drift, causing "half-word" highlighting.
+    // Content for display and TTS
+    // The ArticleExtractor already handles whitespace normalization,
+    // so we use content directly when we have formatting spans.
     var cleanedContent: String {
+        // With rich formatting, use content as-is (spans are aligned to it)
+        if currentChapter.formattingSpans != nil && !currentChapter.formattingSpans!.isEmpty {
+            return currentChapter.content
+        }
+        
+        // Legacy plain-text articles: minimal cleanup
         return currentChapter.content
-            .replacingOccurrences(of: "\n\n", with: "\n")
-            .replacingOccurrences(of: "\r\n\r\n", with: "\n")
+    }
+    
+    // Formatting spans adjusted for cleaned content (if needed)
+    var adjustedSpans: [FormattingSpan]? {
+        // For now, spans should already align with content
+        // If cleaning changes indices, we'd need to adjust here
+        return currentChapter.formattingSpans
     }
 
     var body: some View {
@@ -50,19 +65,23 @@ struct ArticleReaderView: View {
             GlassBackgroundView(primaryColor: .royalPurple, secondaryColor: .blue)
 
             VStack(spacing: 0) {
-                // UNIFIED READER VIEW
-                UnifiedReaderTextView(
+                // RICH TEXT READER VIEW
+                RichTextReaderView(
                     articleTitle: article.title,
                     author: article.author,
                     source: article.displaySource,
                     chapterTitle: article.chapters.count > 1 ? currentChapter.title : nil,
-                    content: cleanedContent, // Pass the CLEANED content
+                    content: cleanedContent,
+                    formattingSpans: adjustedSpans,
                     highlightRange: tts.currentWordRange,
                     isPlaying: tts.isPlaying,
                     lineSpacing: lineSpacing,
                     paragraphSpacing: paragraphSpacing,
                     onTapWord: { position in
                         tts.seekAndPlay(to: position)
+                    },
+                    onTapLink: { url in
+                        UIApplication.shared.open(url)
                     }
                 )
                 .id("reader_L\(Int(lineSpacing))_P\(Int(paragraphSpacing))_\(currentChapter.id)")
@@ -127,8 +146,7 @@ struct ArticleReaderView: View {
     // MARK: - TTS Helpers
     private func loadChapterForTTS() {
         tts.stop()
-        // CRITICAL FIX: Load the CLEANED content into TTS.
-        // Now indices match the visual view 1:1.
+        // Load the CLEANED content into TTS - indices match the visual view
         tts.loadText(cleanedContent)
         
         if currentChapterIndex == article.lastReadChapter && article.lastReadPosition > 0 {
@@ -346,14 +364,17 @@ struct ArticleReaderView: View {
     }
 }
 
-// MARK: - UNIFIED READER TEXT VIEW (Cleaned & Snapping)
+// MARK: - RICH TEXT READER VIEW
 
-struct UnifiedReaderTextView: UIViewRepresentable {
+/// UIViewRepresentable that renders rich text with formatting spans
+/// Preserves TTS sync by using plain text indices
+struct RichTextReaderView: UIViewRepresentable {
     let articleTitle: String
     let author: String?
     let source: String
     let chapterTitle: String?
     let content: String
+    let formattingSpans: [FormattingSpan]?
     let highlightRange: NSRange
     let isPlaying: Bool
     
@@ -361,34 +382,72 @@ struct UnifiedReaderTextView: UIViewRepresentable {
     let paragraphSpacing: CGFloat
     
     let onTapWord: (Int) -> Void
+    let onTapLink: (URL) -> Void
     
     private let contentOffset: Int
     private let fullAttributedText: NSAttributedString
+    private let linkRanges: [(NSRange, URL)]  // Store link locations for tap detection
+    
+    // Purple color matching app theme
+    private static let purpleColor = UIColor(red: 0.4, green: 0.2, blue: 0.8, alpha: 1.0)
     
     init(articleTitle: String,
          author: String?,
          source: String,
          chapterTitle: String?,
          content: String,
+         formattingSpans: [FormattingSpan]?,
          highlightRange: NSRange,
          isPlaying: Bool,
          lineSpacing: CGFloat,
          paragraphSpacing: CGFloat,
-         onTapWord: @escaping (Int) -> Void) {
+         onTapWord: @escaping (Int) -> Void,
+         onTapLink: @escaping (URL) -> Void) {
         
         self.articleTitle = articleTitle
         self.author = author
         self.source = source
         self.chapterTitle = chapterTitle
         self.content = content
+        self.formattingSpans = formattingSpans
         self.highlightRange = highlightRange
         self.isPlaying = isPlaying
         self.lineSpacing = lineSpacing
         self.paragraphSpacing = paragraphSpacing
         self.onTapWord = onTapWord
+        self.onTapLink = onTapLink
         
-        // Construct Full Text
+        // Build the attributed string
+        let (attributedString, offset, links) = Self.buildAttributedString(
+            articleTitle: articleTitle,
+            author: author,
+            source: source,
+            chapterTitle: chapterTitle,
+            content: content,
+            formattingSpans: formattingSpans,
+            lineSpacing: lineSpacing,
+            paragraphSpacing: paragraphSpacing
+        )
+        
+        self.fullAttributedText = attributedString
+        self.contentOffset = offset
+        self.linkRanges = links
+    }
+    
+    /// Builds the complete attributed string with header and formatted body
+    private static func buildAttributedString(
+        articleTitle: String,
+        author: String?,
+        source: String,
+        chapterTitle: String?,
+        content: String,
+        formattingSpans: [FormattingSpan]?,
+        lineSpacing: CGFloat,
+        paragraphSpacing: CGFloat
+    ) -> (NSAttributedString, Int, [(NSRange, URL)]) {
+        
         let combined = NSMutableAttributedString()
+        var linkRanges: [(NSRange, URL)] = []
         
         // -- HEADER --
         let headerStyle = NSMutableParagraphStyle()
@@ -397,14 +456,14 @@ struct UnifiedReaderTextView: UIViewRepresentable {
         
         let titleAttrs: [NSAttributedString.Key: Any] = [
             .font: UIFont.systemFont(ofSize: 28, weight: .bold),
-            .foregroundColor: UIColor.label,
+            .foregroundColor: UIColor.white,
             .paragraphStyle: headerStyle
         ]
         combined.append(NSAttributedString(string: articleTitle + "\n", attributes: titleAttrs))
         
         let metaAttrs: [NSAttributedString.Key: Any] = [
             .font: UIFont.preferredFont(forTextStyle: .subheadline),
-            .foregroundColor: UIColor.secondaryLabel,
+            .foregroundColor: UIColor.white.withAlphaComponent(0.6),
             .paragraphStyle: headerStyle
         ]
         
@@ -415,13 +474,13 @@ struct UnifiedReaderTextView: UIViewRepresentable {
         if let chTitle = chapterTitle {
             let chAttrs: [NSAttributedString.Key: Any] = [
                 .font: UIFont.systemFont(ofSize: 20, weight: .semibold),
-                .foregroundColor: UIColor.systemPurple,
+                .foregroundColor: purpleColor,
                 .paragraphStyle: headerStyle
             ]
             combined.append(NSAttributedString(string: chTitle + "\n\n", attributes: chAttrs))
         }
         
-        self.contentOffset = combined.length
+        let contentOffset = combined.length
         
         // -- BODY --
         let bodyStyle = NSMutableParagraphStyle()
@@ -430,13 +489,128 @@ struct UnifiedReaderTextView: UIViewRepresentable {
         
         let bodyAttrs: [NSAttributedString.Key: Any] = [
             .font: UIFont.systemFont(ofSize: 18, weight: .regular),
-            .foregroundColor: UIColor.label,
+            .foregroundColor: UIColor.white,
             .paragraphStyle: bodyStyle
         ]
         
-        // Content is already cleaned by parent view
-        combined.append(NSAttributedString(string: content, attributes: bodyAttrs))
-        self.fullAttributedText = combined
+        // Start with plain body text
+        let bodyText = NSMutableAttributedString(string: content, attributes: bodyAttrs)
+        
+        // Apply formatting spans
+        // CRITICAL: Convert Character indices to UTF-16 NSRange for NSAttributedString
+        // Swift String uses Character (grapheme cluster) counts, but NSAttributedString uses UTF-16
+        if let spans = formattingSpans {
+            for span in spans {
+                guard span.location >= 0 && span.location + span.length <= content.count else { continue }
+                
+                // Safely convert Character indices to String.Index, then to NSRange
+                let startIdx = content.index(content.startIndex, offsetBy: span.location)
+                let endIdx = content.index(startIdx, offsetBy: span.length)
+                let range = NSRange(startIdx..<endIdx, in: content)
+                
+                switch span.style {
+                case .bold:
+                    bodyText.addAttribute(.font, value: UIFont.systemFont(ofSize: 18, weight: .bold), range: range)
+                    
+                case .italic:
+                    bodyText.addAttribute(.font, value: UIFont.italicSystemFont(ofSize: 18), range: range)
+                    
+                case .boldItalic:
+                    if let descriptor = UIFont.systemFont(ofSize: 18, weight: .bold).fontDescriptor.withSymbolicTraits([.traitBold, .traitItalic]) {
+                        bodyText.addAttribute(.font, value: UIFont(descriptor: descriptor, size: 18), range: range)
+                    }
+                    
+                case .header1:
+                    let h1Style = NSMutableParagraphStyle()
+                    h1Style.lineSpacing = lineSpacing
+                    h1Style.paragraphSpacing = paragraphSpacing + 8
+                    h1Style.paragraphSpacingBefore = 16
+                    bodyText.addAttributes([
+                        .font: UIFont.systemFont(ofSize: 26, weight: .bold),
+                        .foregroundColor: UIColor.white,
+                        .paragraphStyle: h1Style
+                    ], range: range)
+                    
+                case .header2:
+                    let h2Style = NSMutableParagraphStyle()
+                    h2Style.lineSpacing = lineSpacing
+                    h2Style.paragraphSpacing = paragraphSpacing + 4
+                    h2Style.paragraphSpacingBefore = 12
+                    bodyText.addAttributes([
+                        .font: UIFont.systemFont(ofSize: 22, weight: .semibold),
+                        .foregroundColor: UIColor.white,
+                        .paragraphStyle: h2Style
+                    ], range: range)
+                    
+                case .header3:
+                    let h3Style = NSMutableParagraphStyle()
+                    h3Style.lineSpacing = lineSpacing
+                    h3Style.paragraphSpacing = paragraphSpacing + 2
+                    h3Style.paragraphSpacingBefore = 8
+                    bodyText.addAttributes([
+                        .font: UIFont.systemFont(ofSize: 19, weight: .semibold),
+                        .foregroundColor: UIColor.white.withAlphaComponent(0.9),
+                        .paragraphStyle: h3Style
+                    ], range: range)
+                    
+                case .blockquote:
+                    let quoteStyle = NSMutableParagraphStyle()
+                    quoteStyle.lineSpacing = lineSpacing
+                    quoteStyle.paragraphSpacing = paragraphSpacing
+                    quoteStyle.firstLineHeadIndent = 16
+                    quoteStyle.headIndent = 16
+                    quoteStyle.tailIndent = -8
+                    bodyText.addAttributes([
+                        .font: UIFont.italicSystemFont(ofSize: 17),
+                        .foregroundColor: UIColor.white.withAlphaComponent(0.8),
+                        .backgroundColor: UIColor.white.withAlphaComponent(0.05),
+                        .paragraphStyle: quoteStyle
+                    ], range: range)
+                    
+                case .listItem:
+                    let listStyle = NSMutableParagraphStyle()
+                    listStyle.lineSpacing = lineSpacing
+                    listStyle.paragraphSpacing = paragraphSpacing / 2
+                    listStyle.firstLineHeadIndent = 0
+                    listStyle.headIndent = 20
+                    bodyText.addAttribute(.paragraphStyle, value: listStyle, range: range)
+                    
+                case .link:
+                    bodyText.addAttributes([
+                        .foregroundColor: purpleColor,
+                        .underlineStyle: NSUnderlineStyle.single.rawValue,
+                        .underlineColor: purpleColor.withAlphaComponent(0.5)
+                    ], range: range)
+                    
+                    // Store link range for tap detection
+                    if let urlString = span.url, let url = URL(string: urlString) {
+                        let adjustedRange = NSRange(location: range.location + contentOffset, length: range.length)
+                        linkRanges.append((adjustedRange, url))
+                    }
+                    
+                case .code:
+                    bodyText.addAttributes([
+                        .font: UIFont.monospacedSystemFont(ofSize: 16, weight: .regular),
+                        .foregroundColor: UIColor(red: 0.9, green: 0.7, blue: 1.0, alpha: 1.0),
+                        .backgroundColor: UIColor.white.withAlphaComponent(0.1)
+                    ], range: range)
+                    
+                case .preformatted:
+                    let preStyle = NSMutableParagraphStyle()
+                    preStyle.lineSpacing = 4
+                    preStyle.paragraphSpacing = paragraphSpacing
+                    bodyText.addAttributes([
+                        .font: UIFont.monospacedSystemFont(ofSize: 14, weight: .regular),
+                        .foregroundColor: UIColor(red: 0.85, green: 0.85, blue: 0.9, alpha: 1.0),
+                        .backgroundColor: UIColor.black.withAlphaComponent(0.3),
+                        .paragraphStyle: preStyle
+                    ], range: range)
+                }
+            }
+        }
+        
+        combined.append(bodyText)
+        return (combined, contentOffset, linkRanges)
     }
 
     func makeUIView(context: Context) -> UITextView {
@@ -447,6 +621,9 @@ struct UnifiedReaderTextView: UIViewRepresentable {
         textView.backgroundColor = .clear
         textView.textContainerInset = UIEdgeInsets(top: 20, left: 16, bottom: UIScreen.main.bounds.height / 2, right: 16)
         
+        // Disable default link interaction (we handle it ourselves)
+        textView.isSelectable = false
+        
         let tapGesture = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleTap(_:)))
         textView.addGestureRecognizer(tapGesture)
         
@@ -454,13 +631,20 @@ struct UnifiedReaderTextView: UIViewRepresentable {
     }
 
     func updateUIView(_ textView: UITextView, context: Context) {
-        if textView.attributedText.string != fullAttributedText.string ||
-           !textView.attributedText.isEqual(to: fullAttributedText) {
-             if !isPlaying {
-                 textView.attributedText = fullAttributedText
-             }
+        // Update coordinator with current values
+        context.coordinator.onTapWord = onTapWord
+        context.coordinator.onTapLink = onTapLink
+        context.coordinator.contentOffset = contentOffset
+        context.coordinator.linkRanges = linkRanges
+        
+        // Update text if changed (but not during playback to avoid flicker)
+        if !isPlaying {
+            if textView.attributedText.string != fullAttributedText.string {
+                textView.attributedText = fullAttributedText
+            }
         }
         
+        // Apply highlighting during playback
         if isPlaying && highlightRange.location != NSNotFound {
             let mutableText = NSMutableAttributedString(attributedString: fullAttributedText)
             
@@ -468,18 +652,18 @@ struct UnifiedReaderTextView: UIViewRepresentable {
             let viewLength = highlightRange.length
             
             if viewLocation + viewLength <= mutableText.length {
-                // FIXED: Snap to Word Boundaries
-                // If TTS returns "art" of "smart", we expand to "smart"
+                // Snap to word boundaries for cleaner highlighting
                 let rawRange = NSRange(location: viewLocation, length: viewLength)
                 let snappedRange = snapToWordBoundary(text: mutableText.string, range: rawRange)
                 
                 let highlightAttrs: [NSAttributedString.Key: Any] = [
                     .foregroundColor: UIColor.white,
-                    .backgroundColor: UIColor(red: 0.4, green: 0.2, blue: 0.6, alpha: 1.0)
+                    .backgroundColor: Self.purpleColor
                 ]
                 mutableText.addAttributes(highlightAttrs, range: snappedRange)
                 textView.attributedText = mutableText
                 
+                // Auto-scroll to keep highlighted word visible
                 DispatchQueue.main.async {
                     let layoutManager = textView.layoutManager
                     let textContainer = textView.textContainer
@@ -501,12 +685,9 @@ struct UnifiedReaderTextView: UIViewRepresentable {
                 }
             }
         }
-        
-        context.coordinator.onTap = onTapWord
-        context.coordinator.contentOffset = contentOffset
     }
     
-    // NEW HELPER: Ensures full words are highlighted even if TTS range is partial
+    /// Ensures full words are highlighted even if TTS range is partial
     func snapToWordBoundary(text: String, range: NSRange) -> NSRange {
         let nsString = text as NSString
         guard range.location < nsString.length else { return range }
@@ -536,16 +717,20 @@ struct UnifiedReaderTextView: UIViewRepresentable {
     }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(contentOffset: contentOffset, onTap: onTapWord)
+        Coordinator(contentOffset: contentOffset, linkRanges: linkRanges, onTapWord: onTapWord, onTapLink: onTapLink)
     }
 
     class Coordinator: NSObject {
         var contentOffset: Int
-        var onTap: (Int) -> Void
+        var linkRanges: [(NSRange, URL)]
+        var onTapWord: (Int) -> Void
+        var onTapLink: (URL) -> Void
 
-        init(contentOffset: Int, onTap: @escaping (Int) -> Void) {
+        init(contentOffset: Int, linkRanges: [(NSRange, URL)], onTapWord: @escaping (Int) -> Void, onTapLink: @escaping (URL) -> Void) {
             self.contentOffset = contentOffset
-            self.onTap = onTap
+            self.linkRanges = linkRanges
+            self.onTapWord = onTapWord
+            self.onTapLink = onTapLink
         }
 
         @objc func handleTap(_ gesture: UITapGestureRecognizer) {
@@ -560,6 +745,15 @@ struct UnifiedReaderTextView: UIViewRepresentable {
             let textContainer = textView.textContainer
             let characterIndex = layoutManager.characterIndex(for: point, in: textContainer, fractionOfDistanceBetweenInsertionPoints: nil)
             
+            // Check if tap is on a link first
+            for (range, url) in linkRanges {
+                if NSLocationInRange(characterIndex, range) {
+                    onTapLink(url)
+                    return
+                }
+            }
+            
+            // Otherwise, handle as word tap for TTS seeking
             let bodyIndex = characterIndex - contentOffset
             if bodyIndex >= 0 {
                 let text = textView.text ?? ""
@@ -573,9 +767,14 @@ struct UnifiedReaderTextView: UIViewRepresentable {
                         }
                         wordStart -= 1
                     }
-                    onTap(wordStart - contentOffset)
+                    onTapWord(wordStart - contentOffset)
                 }
             }
         }
     }
 }
+
+// MARK: - Legacy Support (Backward Compatibility)
+
+/// Alias for old code that might reference UnifiedReaderTextView
+typealias UnifiedReaderTextView = RichTextReaderView

@@ -5,6 +5,7 @@
 //  UPDATED: Uses ImageCache for reliable Audiobook covers
 //  FIXED: Artwork logic now uses caching layer instead of raw URLSession
 //  UPDATED: Chapter boundary support for M4B audiobooks (virtual chapters)
+//  FIXED: No longer auto-plays on app startup - starts paused with state restored
 //
 
 import Foundation
@@ -157,6 +158,7 @@ class AudioPlayer: NSObject, ObservableObject {
     private var chapterEndObserver: Any?
     private var isHandlingChapterEnd = false  // Guard against multiple triggers
     private var playbackGeneration: Int = 0   // Increments each time we load a new track
+    private var isRestoringState = false      // Suppress auto-play during state restoration
     
     private var currentExternalArtworkURL: URL? = nil
     
@@ -368,14 +370,18 @@ class AudioPlayer: NSObject, ObservableObject {
     }
     
     func restoreState(completion: (() -> Void)? = nil) {
+        isRestoringState = true  // Suppress auto-play during restoration
+        
         guard let data = UserDefaults.standard.data(forKey: stateKey),
               let state = try? JSONDecoder().decode(PlaybackState.self, from: data) else {
+            isRestoringState = false
             completion?()
             return
         }
         
         // Check if state is too old (7 days)
         if Date().timeIntervalSince(state.lastSaveTime) > 7 * 24 * 60 * 60 {
+            isRestoringState = false
             completion?()
             return
         }
@@ -399,6 +405,9 @@ class AudioPlayer: NSObject, ObservableObject {
             loadTrack(at: state.currentIndex)
             
             // Restore position after a short delay (let track load)
+            // Note: isRestoringState is cleared inside setupAVPlayer/loadLocalFile after the
+            // auto-play check, so it stays true until that check has been made regardless
+            // of how long network buffering takes.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                 if state.currentPosition > 5 {
                     self.seek(to: state.currentPosition)
@@ -406,6 +415,7 @@ class AudioPlayer: NSObject, ObservableObject {
                 completion?()
             }
         } else {
+            isRestoringState = false
             completion?()
         }
     }
@@ -485,7 +495,11 @@ class AudioPlayer: NSObject, ObservableObject {
             try engine.start()
             updateAudioEffects()
             restoreSavedPosition()
-        } catch { print("Engine load error: \(error)") }
+            isRestoringState = false  // Clear flag after setup complete
+        } catch { 
+            isRestoringState = false  // Clear flag even on error
+            print("Engine load error: \(error)") 
+        }
     }
     
     private func loadTrackAndPlay(at index: Int) { 
@@ -516,7 +530,7 @@ class AudioPlayer: NSObject, ObservableObject {
     
     // MARK: - AVPlayer Setup (Chapter-Aware)
     private func setupAVPlayer(with item: AVPlayerItem, track: Track) {
-        print("🎵 setupAVPlayer for: \(track.title)")
+        print("🎵 setupAVPlayer for: \(track.title), isRestoringState: \(isRestoringState)")
         avPlayer = AVPlayer(playerItem: item)
         updatePlayerVolume()
         
@@ -528,7 +542,7 @@ class AudioPlayer: NSObject, ObservableObject {
                 DispatchQueue.main.async {
                     guard let self = self else { return }
                     
-                    print("🎵 AVPlayer ready, track has boundaries: \(track.hasChapterBoundaries)")
+                    print("🎵 AVPlayer ready, track has boundaries: \(track.hasChapterBoundaries), isRestoringState: \(self.isRestoringState)")
                     
                     // For chapter tracks, seek to chapter start first
                     if track.hasChapterBoundaries, let startTime = track.startTime {
@@ -536,15 +550,21 @@ class AudioPlayer: NSObject, ObservableObject {
                         self.avPlayer?.seek(to: CMTimeMakeWithSeconds(startTime, preferredTimescale: 600)) { finished in
                             print("🎵 Seek to start completed: \(finished)")
                             self.restoreSavedPosition()
-                            // Auto-play for HTTP streams OR local chapter files
-                            if track.filename.starts(with: "http") || isLocalChapterFile {
+                            // Auto-play for HTTP streams OR local chapter files (but NOT during state restoration)
+                            let shouldAutoPlay = !self.isRestoringState && (track.filename.starts(with: "http") || isLocalChapterFile)
+                            self.isRestoringState = false  // Clear flag after check
+                            if shouldAutoPlay {
                                 print("🎵 Auto-playing after seek")
                                 self.play()
                             }
                         }
                     } else {
                         self.restoreSavedPosition()
-                        if track.filename.starts(with: "http") {
+                        // Auto-play for HTTP streams (but NOT during state restoration)
+                        let shouldAutoPlay = !self.isRestoringState && track.filename.starts(with: "http")
+                        self.isRestoringState = false  // Clear flag after check
+                        if shouldAutoPlay {
+                            print("🎵 Auto-playing HTTP stream")
                             self.play()
                         }
                     }
@@ -1186,7 +1206,7 @@ class InterruptionManager {
             return
         }
         
-        print("🔈 Secondary audio hint: \(type == .begin ? "BEGIN" : "END")")
+        print("📈 Secondary audio hint: \(type == .begin ? "BEGIN" : "END")")
         
         switch type {
         case .begin:

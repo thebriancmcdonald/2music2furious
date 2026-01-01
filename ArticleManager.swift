@@ -3,25 +3,71 @@
 //  2 Music 2 Furious
 //
 //  Article models and management for text-to-speech reader
-//  PERFORMANCE UPDATE: Lazy loading for articles
+//  Uses ArticleExtractor + SwiftSoup for rich text parsing
 //
 
 import Foundation
 import SwiftUI
 import Combine
 
+// MARK: - Formatting Models
+
+/// Style types that can be applied to text spans
+enum FormattingStyle: String, Codable, Equatable {
+    case bold
+    case italic
+    case boldItalic
+    case header1
+    case header2
+    case header3
+    case blockquote
+    case listItem
+    case link
+    case code
+    case preformatted
+}
+
+/// A span of formatting applied to a range of plain text
+/// The plain text is preserved for TTS sync; formatting is applied visually
+struct FormattingSpan: Codable, Equatable {
+    let location: Int
+    let length: Int
+    let style: FormattingStyle
+    let url: String?  // For links only
+    
+    var nsRange: NSRange {
+        NSRange(location: location, length: length)
+    }
+    
+    init(location: Int, length: Int, style: FormattingStyle, url: String? = nil) {
+        self.location = location
+        self.length = length
+        self.style = style
+        self.url = url
+    }
+    
+    init(range: NSRange, style: FormattingStyle, url: String? = nil) {
+        self.location = range.location
+        self.length = range.length
+        self.style = style
+        self.url = url
+    }
+}
+
 // MARK: - Article Chapter Model
 
-struct ArticleChapter: Identifiable, Codable {
+struct ArticleChapter: Identifiable, Codable, Equatable {
     let id: UUID
     var title: String
-    var content: String              // Plain text for TTS
-    var htmlContent: String?         // Original HTML for rich display (optional)
+    var content: String                        // Plain text for TTS (always used)
+    var formattingSpans: [FormattingSpan]?     // Rich formatting overlays (optional)
+    var htmlContent: String?                   // Original HTML (kept for potential re-parsing)
 
-    init(id: UUID = UUID(), title: String, content: String, htmlContent: String? = nil) {
+    init(id: UUID = UUID(), title: String, content: String, formattingSpans: [FormattingSpan]? = nil, htmlContent: String? = nil) {
         self.id = id
         self.title = title
         self.content = content
+        self.formattingSpans = formattingSpans
         self.htmlContent = htmlContent
     }
 
@@ -33,11 +79,17 @@ struct ArticleChapter: Identifiable, Codable {
     var wordCount: Int {
         content.split(separator: " ").count
     }
+    
+    /// Returns true if this chapter has rich formatting
+    var hasFormatting: Bool {
+        guard let spans = formattingSpans else { return false }
+        return !spans.isEmpty
+    }
 }
 
 // MARK: - Article Model
 
-struct Article: Identifiable, Codable {
+struct Article: Identifiable, Codable, Equatable {
     let id: UUID
     var title: String
     var source: String
@@ -100,6 +152,11 @@ struct Article: Identifiable, Codable {
             return host.replacingOccurrences(of: "www.", with: "")
         }
         return source
+    }
+    
+    /// Returns true if any chapter has rich formatting
+    var hasFormatting: Bool {
+        chapters.contains { $0.hasFormatting }
     }
 }
 
@@ -168,11 +225,11 @@ class ArticleManager: ObservableObject {
         }
     }
     
-    /// Background task to fetch content for "Shell" articles
+    /// Background task to fetch content for "Shell" articles using ArticleExtractor
     private func hydrateArticleContent(_ article: Article) {
         guard let url = article.sourceURL else { return }
         
-        // Mark as downloading (optional UI indicator)
+        // Mark as downloading
         if let idx = articles.firstIndex(where: { $0.id == article.id }) {
             var updated = articles[idx]
             updated.isDownloading = true
@@ -181,20 +238,20 @@ class ArticleManager: ObservableObject {
         
         Task {
             do {
-                let (title, content) = try await fetchAndParseURL(url)
+                // Use the new ArticleExtractor with Readability.js + SwiftSoup
+                let extractedArticle = try await ArticleExtractor.extract(from: url)
                 
-                DispatchQueue.main.async {
+                await MainActor.run {
                     if let idx = self.articles.firstIndex(where: { $0.id == article.id }) {
                         var updated = self.articles[idx]
                         
-                        // Update title if the specific fetch found a better one
+                        // Update with extracted content
                         if updated.title == "New Article" || updated.title == "Web Article" {
-                            updated.title = title
+                            updated.title = extractedArticle.title
                         }
                         
-                        // Update content
-                        let newChapter = ArticleChapter(id: UUID(), title: title, content: content)
-                        updated.chapters = [newChapter]
+                        updated.author = extractedArticle.author
+                        updated.chapters = extractedArticle.chapters
                         updated.isDownloading = false
                         
                         self.articles[idx] = updated
@@ -203,124 +260,13 @@ class ArticleManager: ObservableObject {
                 }
             } catch {
                 print("Failed to hydrate article: \(error)")
-                DispatchQueue.main.async {
+                await MainActor.run {
                     if let idx = self.articles.firstIndex(where: { $0.id == article.id }) {
                         self.articles[idx].isDownloading = false
                     }
                 }
             }
         }
-    }
-
-    // MARK: - Network / Parsing Logic
-    
-    private func fetchAndParseURL(_ url: URL) async throws -> (String, String) {
-        let (data, response) = try await URLSession.shared.data(from: url)
-        
-        guard let httpResponse = response as? HTTPURLResponse,
-              (200...299).contains(httpResponse.statusCode),
-              let html = String(data: data, encoding: .utf8) else {
-            throw URLError(.badServerResponse)
-        }
-
-        // 1. Extract Title
-        var title = "Web Article"
-        if let titleMatch = html.range(of: "<title[^>]*>(.*?)</title>", options: .regularExpression) {
-            title = String(html[titleMatch])
-                .replacingOccurrences(of: "<title[^>]*>", with: "", options: .regularExpression)
-                .replacingOccurrences(of: "</title>", with: "")
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-        
-        // Cleanup title
-        if let pipeRange = title.range(of: " | ") { title = String(title[..<pipeRange.lowerBound]) }
-        if let dashRange = title.range(of: " - ", options: .backwards) {
-            let beforeDash = String(title[..<dashRange.lowerBound])
-            if beforeDash.count > 10 { title = beforeDash }
-        }
-
-        // 2. Extract Content (Simple Heuristic)
-        var content = html
-        let contentPatterns = ["<article[^>]*>([\\s\\S]*?)</article>", "<main[^>]*>([\\s\\S]*?)</main>"]
-        
-        for pattern in contentPatterns {
-            if let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive),
-               let match = regex.firstMatch(in: html, range: NSRange(html.startIndex..., in: html)),
-               let range = Range(match.range(at: 1), in: html) {
-                content = String(html[range])
-                break
-            }
-        }
-
-        // 3. Clean Content
-        let removePatterns = [
-            "<script[^>]*>[\\s\\S]*?</script>", "<style[^>]*>[\\s\\S]*?</style>",
-            "<nav[^>]*>[\\s\\S]*?</nav>", "<footer[^>]*>[\\s\\S]*?</footer>",
-            "<header[^>]*>[\\s\\S]*?</header>"
-        ]
-        for pattern in removePatterns {
-            content = content.replacingOccurrences(of: pattern, with: "", options: .regularExpression)
-        }
-
-        content = content.replacingOccurrences(of: "<br[^>]*>", with: "\n", options: .regularExpression)
-        content = content.replacingOccurrences(of: "</p>", with: "\n\n", options: .caseInsensitive)
-        content = content.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
-        
-        // Decode Entities
-        content = content
-            .replacingOccurrences(of: "&nbsp;", with: " ")
-            .replacingOccurrences(of: "&amp;", with: "&")
-            .replacingOccurrences(of: "&lt;", with: "<")
-            .replacingOccurrences(of: "&gt;", with: ">")
-            .replacingOccurrences(of: "&quot;", with: "\"")
-            .replacingOccurrences(of: "&#39;", with: "'")
-
-        content = content.replacingOccurrences(of: "\n{3,}", with: "\n\n", options: .regularExpression)
-        content = content.trimmingCharacters(in: .whitespacesAndNewlines)
-        
-        if content.isEmpty { content = "Could not extract content from this page." }
-
-        return (title, content)
-    }
-    
-    // MARK: - UI Helper Logic
-    
-    func splitIntoChapters(title: String, content: String, html: String? = nil) -> [ArticleChapter] {
-        let lines = content.components(separatedBy: "\n")
-        var chapters: [ArticleChapter] = []
-        var currentTitle = title
-        var currentContent: [String] = []
-
-        for line in lines {
-            // Check for markdown headers (## or ###)
-            if line.hasPrefix("## ") || line.hasPrefix("### ") {
-                if !currentContent.isEmpty {
-                    let chapterText = currentContent.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
-                    if !chapterText.isEmpty {
-                        chapters.append(ArticleChapter(title: currentTitle, content: chapterText))
-                    }
-                }
-                currentTitle = line.replacingOccurrences(of: "### ", with: "")
-                    .replacingOccurrences(of: "## ", with: "")
-                    .trimmingCharacters(in: .whitespaces)
-                currentContent = []
-            } else {
-                currentContent.append(line)
-            }
-        }
-
-        if !currentContent.isEmpty {
-            let chapterText = currentContent.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
-            if !chapterText.isEmpty {
-                chapters.append(ArticleChapter(title: currentTitle, content: chapterText))
-            }
-        }
-
-        if chapters.isEmpty {
-            chapters.append(ArticleChapter(title: title, content: content))
-        }
-
-        return chapters
     }
 
     // MARK: - CRUD Operations
@@ -357,6 +303,45 @@ class ArticleManager: ObservableObject {
     func createArticleFromText(title: String, text: String, source: String = "Pasted Text") -> Article {
         let chapter = ArticleChapter(title: title, content: text)
         return Article(title: title, source: source, chapters: [chapter])
+    }
+    
+    /// Splits content into chapters based on markdown-style headers
+    func splitIntoChapters(title: String, content: String) -> [ArticleChapter] {
+        let lines = content.components(separatedBy: "\n")
+        var chapters: [ArticleChapter] = []
+        var currentTitle = title
+        var currentContent: [String] = []
+
+        for line in lines {
+            // Check for markdown headers (## or ###)
+            if line.hasPrefix("## ") || line.hasPrefix("### ") {
+                if !currentContent.isEmpty {
+                    let chapterText = currentContent.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !chapterText.isEmpty {
+                        chapters.append(ArticleChapter(title: currentTitle, content: chapterText))
+                    }
+                }
+                currentTitle = line.replacingOccurrences(of: "### ", with: "")
+                    .replacingOccurrences(of: "## ", with: "")
+                    .trimmingCharacters(in: .whitespaces)
+                currentContent = []
+            } else {
+                currentContent.append(line)
+            }
+        }
+
+        if !currentContent.isEmpty {
+            let chapterText = currentContent.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+            if !chapterText.isEmpty {
+                chapters.append(ArticleChapter(title: currentTitle, content: chapterText))
+            }
+        }
+
+        if chapters.isEmpty {
+            chapters.append(ArticleChapter(title: title, content: content))
+        }
+
+        return chapters
     }
 
     // MARK: - Persistence
