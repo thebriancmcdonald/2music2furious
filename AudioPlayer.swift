@@ -329,21 +329,21 @@ class AudioPlayer: NSObject, ObservableObject {
         guard playerType != "Music", let track = currentTrack else { return }
         let positions = UserDefaults.standard.dictionary(forKey: positionKey) as? [String: Double] ?? [:]
         let key = track.hasChapterBoundaries ? track.id.uuidString : track.filename
-        print("🎵 restoreSavedPosition: key=\(key), saved=\(positions[key] ?? -1)")
+        print("ðŸŽµ restoreSavedPosition: key=\(key), saved=\(positions[key] ?? -1)")
         if let saved = positions[key], saved > 5 {
             // For chapter tracks, seek to saved absolute position
             if track.hasChapterBoundaries, let startTime = track.startTime {
                 let relativePosition = saved - startTime
-                print("🎵 restoreSavedPosition: seeking to relative \(relativePosition)")
+                print("ðŸŽµ restoreSavedPosition: seeking to relative \(relativePosition)")
                 if relativePosition > 0 {
                     seek(to: relativePosition)
                 }
             } else {
-                print("🎵 restoreSavedPosition: seeking to \(saved)")
+                print("ðŸŽµ restoreSavedPosition: seeking to \(saved)")
                 seek(to: saved)
             }
         } else {
-            print("🎵 restoreSavedPosition: no saved position or < 5 sec")
+            print("ðŸŽµ restoreSavedPosition: no saved position or < 5 sec")
         }
     }
     
@@ -434,9 +434,9 @@ class AudioPlayer: NSObject, ObservableObject {
     }
     
     func loadTrack(at index: Int) {
-        print("🎵 loadTrack called: index=\(index), queue.count=\(queue.count)")
+        print("ðŸŽµ loadTrack called: index=\(index), queue.count=\(queue.count)")
         guard index >= 0 && index < queue.count else { 
-            print("🎵 loadTrack: index out of bounds!")
+            print("ðŸŽµ loadTrack: index out of bounds!")
             return 
         }
         isHandlingChapterEnd = false  // Reset chapter end guard for new track
@@ -445,21 +445,21 @@ class AudioPlayer: NSObject, ObservableObject {
         currentIndex = index
         currentTrack = track
         
-        print("🎵 Loading track: \(track.title), startTime=\(track.startTime ?? -1), endTime=\(track.endTime ?? -1)")
+        print("ðŸŽµ Loading track: \(track.title), startTime=\(track.startTime ?? -1), endTime=\(track.endTime ?? -1)")
         
         if track.filename.starts(with: "ipod-library://") {
-            print("🎵 Using iPod library path")
+            print("ðŸŽµ Using iPod library path")
             isUsingEngine = false
             let asset = AVURLAsset(url: URL(string: track.filename)!)
             if currentExternalArtworkURL == nil { extractArtwork(from: asset) } else { setExternalArtwork(from: currentExternalArtworkURL) }
             setupAVPlayer(with: AVPlayerItem(asset: asset), track: track)
         } else if track.filename.starts(with: "http") {
-            print("🎵 Using HTTP streaming path")
+            print("ðŸŽµ Using HTTP streaming path")
             isUsingEngine = false
             if let ext = currentExternalArtworkURL { setExternalArtwork(from: ext) } else { self.artwork = nil }
             setupAVPlayer(with: AVPlayerItem(url: URL(string: track.filename)!), track: track)
         } else {
-            print("🎵 Using local file path")
+            print("ðŸŽµ Using local file path")
             loadLocalFile(track: track)
         }
         LockScreenManager.shared.update()
@@ -467,12 +467,12 @@ class AudioPlayer: NSObject, ObservableObject {
     
     private func loadLocalFile(track: Track) {
         let path = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent(track.filename)
-        print("🎵 loadLocalFile: \(path.lastPathComponent), mode: \(audioMode.rawValue)")
+        print("ðŸŽµ loadLocalFile: \(path.lastPathComponent), mode: \(audioMode.rawValue)")
         if currentExternalArtworkURL == nil { extractArtwork(from: AVURLAsset(url: path)) } else { setExternalArtwork(from: currentExternalArtworkURL) }
         
         // Quality mode: Use AVPlayer for better speed algorithm
         if audioMode == .quality {
-            print("🎵 Using AVPlayer (Quality mode)")
+            print("ðŸŽµ Using AVPlayer (Quality mode)")
             isUsingEngine = false
             let asset = AVURLAsset(url: path)
             setupAVPlayer(with: AVPlayerItem(asset: asset), track: track)
@@ -480,7 +480,7 @@ class AudioPlayer: NSObject, ObservableObject {
         }
         
         // Boost mode: Use AVAudioEngine for audio processing
-        print("🎵 Using AVAudioEngine (Boost mode)")
+        print("ðŸŽµ Using AVAudioEngine (Boost mode)")
         do {
             isUsingEngine = true
             audioFile = try AVAudioFile(forReading: path)
@@ -489,12 +489,16 @@ class AudioPlayer: NSObject, ObservableObject {
             
             // For chapter tracks, start at chapter beginning
             let startPosition = track.startTime ?? 0
-            print("🎵 Scheduling from startPosition: \(startPosition)")
+            print("ðŸŽµ Scheduling from startPosition: \(startPosition)")
             scheduleFileSegment(from: startPosition, track: track)
             
             try engine.start()
             updateAudioEffects()
-            restoreSavedPosition()
+            // FIX: Only restore saved position during actual state restoration
+            // Not when user explicitly selects a chapter (prevents skipping to chapter end)
+            if isRestoringState {
+                restoreSavedPosition()
+            }
             isRestoringState = false  // Clear flag after setup complete
         } catch { 
             isRestoringState = false  // Clear flag even on error
@@ -530,7 +534,7 @@ class AudioPlayer: NSObject, ObservableObject {
     
     // MARK: - AVPlayer Setup (Chapter-Aware)
     private func setupAVPlayer(with item: AVPlayerItem, track: Track) {
-        print("🎵 setupAVPlayer for: \(track.title), isRestoringState: \(isRestoringState)")
+        print("ðŸŽµ setupAVPlayer for: \(track.title), isRestoringState: \(isRestoringState)")
         avPlayer = AVPlayer(playerItem: item)
         updatePlayerVolume()
         
@@ -542,29 +546,36 @@ class AudioPlayer: NSObject, ObservableObject {
                 DispatchQueue.main.async {
                     guard let self = self else { return }
                     
-                    print("🎵 AVPlayer ready, track has boundaries: \(track.hasChapterBoundaries), isRestoringState: \(self.isRestoringState)")
+                    print("ðŸŽµ AVPlayer ready, track has boundaries: \(track.hasChapterBoundaries), isRestoringState: \(self.isRestoringState)")
                     
                     // For chapter tracks, seek to chapter start first
                     if track.hasChapterBoundaries, let startTime = track.startTime {
-                        print("🎵 Seeking to chapter start: \(startTime)")
+                        print("ðŸŽµ Seeking to chapter start: \(startTime)")
                         self.avPlayer?.seek(to: CMTimeMakeWithSeconds(startTime, preferredTimescale: 600)) { finished in
-                            print("🎵 Seek to start completed: \(finished)")
-                            self.restoreSavedPosition()
+                            print("ðŸŽµ Seek to start completed: \(finished)")
+                            // FIX: Only restore saved position during actual state restoration
+                            // Not when user explicitly selects a chapter (prevents skipping to chapter end)
+                            if self.isRestoringState {
+                                self.restoreSavedPosition()
+                            }
                             // Auto-play for HTTP streams OR local chapter files (but NOT during state restoration)
                             let shouldAutoPlay = !self.isRestoringState && (track.filename.starts(with: "http") || isLocalChapterFile)
                             self.isRestoringState = false  // Clear flag after check
                             if shouldAutoPlay {
-                                print("🎵 Auto-playing after seek")
+                                print("ðŸŽµ Auto-playing after seek")
                                 self.play()
                             }
                         }
                     } else {
-                        self.restoreSavedPosition()
+                        // FIX: Only restore saved position during actual state restoration
+                        if self.isRestoringState {
+                            self.restoreSavedPosition()
+                        }
                         // Auto-play for HTTP streams (but NOT during state restoration)
                         let shouldAutoPlay = !self.isRestoringState && track.filename.starts(with: "http")
                         self.isRestoringState = false  // Clear flag after check
                         if shouldAutoPlay {
-                            print("🎵 Auto-playing HTTP stream")
+                            print("ðŸŽµ Auto-playing HTTP stream")
                             self.play()
                         }
                     }
@@ -582,7 +593,7 @@ class AudioPlayer: NSObject, ObservableObject {
                let endTime = track.endTime {
                 let currentSecs = time.seconds
                 if currentSecs >= endTime - 0.5 {
-                    print("🎵 Time observer: currentTime=\(currentSecs), endTime=\(endTime) - TRIGGERING CHAPTER END")
+                    print("ðŸŽµ Time observer: currentTime=\(currentSecs), endTime=\(endTime) - TRIGGERING CHAPTER END")
                     self.handleChapterEnd()
                 }
             }
@@ -590,10 +601,10 @@ class AudioPlayer: NSObject, ObservableObject {
         
         // Add boundary time observer for precise chapter end detection
         if track.hasChapterBoundaries, let endTime = track.endTime {
-            print("🎵 Adding boundary observer at: \(endTime)")
+            print("ðŸŽµ Adding boundary observer at: \(endTime)")
             let boundaryTime = CMTimeMakeWithSeconds(endTime, preferredTimescale: 600)
             chapterEndObserver = avPlayer?.addBoundaryTimeObserver(forTimes: [NSValue(time: boundaryTime)], queue: .main) { [weak self] in
-                print("🎵 Boundary observer triggered!")
+                print("ðŸŽµ Boundary observer triggered!")
                 self?.handleChapterEnd()
             }
         }
@@ -603,15 +614,15 @@ class AudioPlayer: NSObject, ObservableObject {
     private func handleChapterEnd() {
         // Guard against multiple triggers from periodic observer
         guard !isHandlingChapterEnd else { 
-            print("🎵 handleChapterEnd: already handling, skipping")
+            print("ðŸŽµ handleChapterEnd: already handling, skipping")
             return 
         }
         guard currentTrack?.hasChapterBoundaries == true else { 
-            print("🎵 handleChapterEnd: track has no chapter boundaries, skipping")
+            print("ðŸŽµ handleChapterEnd: track has no chapter boundaries, skipping")
             return 
         }
         
-        print("🎵 handleChapterEnd: advancing from index \(currentIndex) to \(currentIndex + 1)")
+        print("ðŸŽµ handleChapterEnd: advancing from index \(currentIndex) to \(currentIndex + 1)")
         isHandlingChapterEnd = true  // Prevent re-entry until next track loads
         
         // Auto-advance to next track in queue
@@ -619,7 +630,7 @@ class AudioPlayer: NSObject, ObservableObject {
             next()
         } else {
             // End of queue - pause at chapter end
-            print("🎵 handleChapterEnd: end of queue, pausing")
+            print("ðŸŽµ handleChapterEnd: end of queue, pausing")
             pause()
             isHandlingChapterEnd = false  // Reset since we're not loading a new track
         }
@@ -631,7 +642,7 @@ class AudioPlayer: NSObject, ObservableObject {
         
         // Increment generation to invalidate any pending completion handlers
         playbackGeneration += 1
-        print("🎵 scheduleFileSegment: generation now \(playbackGeneration)")
+        print("ðŸŽµ scheduleFileSegment: generation now \(playbackGeneration)")
         
         let trackToUse = track ?? currentTrack
         
@@ -677,18 +688,18 @@ class AudioPlayer: NSObject, ObservableObject {
                 
                 // Ignore if this is from an old track (generation changed)
                 guard self.playbackGeneration == capturedGeneration else {
-                    print("🎵 Completion handler: ignoring - generation mismatch (\(capturedGeneration) vs \(self.playbackGeneration))")
+                    print("ðŸŽµ Completion handler: ignoring - generation mismatch (\(capturedGeneration) vs \(self.playbackGeneration))")
                     return
                 }
                 
                 guard let currentTrack = self.currentTrack,
                       currentTrack.hasChapterBoundaries,
                       self.isPlaying else { 
-                    print("🎵 Completion handler: ignoring - not playing or no boundaries")
+                    print("ðŸŽµ Completion handler: ignoring - not playing or no boundaries")
                     return 
                 }
                 
-                print("🎵 Completion handler: chapter naturally ended, advancing...")
+                print("ðŸŽµ Completion handler: chapter naturally ended, advancing...")
                 // Chapter ended - advance to next
                 self.handleChapterEnd()
             }
@@ -709,10 +720,10 @@ class AudioPlayer: NSObject, ObservableObject {
                 if engine.isRunning {
                     playerNode.play()
                 } else {
-                    print("⚠️ Engine failed to start, cannot play")
+                    print("âš ï¸ Engine failed to start, cannot play")
                 }
             } catch {
-                print("⚠️ Engine start error: \(error)")
+                print("âš ï¸ Engine start error: \(error)")
             }
         } else {
             avPlayer?.play()
@@ -1093,8 +1104,8 @@ class LockScreenManager {
             let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: colors as CFArray, locations: [0, 1])!
             context.drawLinearGradient(gradient, start: .zero, end: CGPoint(x: size.width, y: size.height), options: [])
             
-            // Draw "2♪" text
-            let text = "2♪"
+            // Draw "2â™ª" text
+            let text = "2â™ª"
             let font = UIFont.systemFont(ofSize: 120, weight: .bold)
             let attributes: [NSAttributedString.Key: Any] = [
                 .font: font,
@@ -1164,7 +1175,7 @@ class InterruptionManager {
             object: nil  // Changed from session to nil
         )
         
-        print("🎙 Audio interruption observers registered")
+        print("ðŸŽ™ Audio interruption observers registered")
     }
     
     // MARK: - Standard Interruption (Phone Calls, Alarms)
@@ -1176,7 +1187,7 @@ class InterruptionManager {
             return
         }
         
-        print("📱 Interruption notification: \(type == .began ? "BEGAN" : "ENDED")")
+        print("ðŸ“± Interruption notification: \(type == .began ? "BEGAN" : "ENDED")")
         
         switch type {
         case .began:
@@ -1206,7 +1217,7 @@ class InterruptionManager {
             return
         }
         
-        print("📈 Secondary audio hint: \(type == .begin ? "BEGIN" : "END")")
+        print("ðŸ“ˆ Secondary audio hint: \(type == .begin ? "BEGIN" : "END")")
         
         switch type {
         case .begin:
@@ -1233,7 +1244,7 @@ class InterruptionManager {
         
         // Pause when headphones are unplugged (standard behavior)
         if reason == .oldDeviceUnavailable {
-            print("🎧 Headphones unplugged - pausing")
+            print("ðŸŽ§ Headphones unplugged - pausing")
             DispatchQueue.main.async {
                 self.musicPlayer?.pause()
                 self.speechPlayer?.pause()
@@ -1257,7 +1268,7 @@ class InterruptionManager {
             self.speechWasPlaying = speech.isPlaying
             self.originalMusicDucking = music.isDucking
             
-            print("⏸️ \(reason) began - music was: \(self.musicWasPlaying), speech was: \(self.speechWasPlaying)")
+            print("â¸ï¸ \(reason) began - music was: \(self.musicWasPlaying), speech was: \(self.speechWasPlaying)")
             
             // Pause speech
             if speech.isPlaying {
@@ -1280,7 +1291,7 @@ class InterruptionManager {
                   let music = self.musicPlayer,
                   let speech = self.speechPlayer else { return }
             
-            print("▶️ Interruption ended - resuming music: \(self.musicWasPlaying), speech: \(self.speechWasPlaying)")
+            print("â–¶ï¸ Interruption ended - resuming music: \(self.musicWasPlaying), speech: \(self.speechWasPlaying)")
             
             // Restore music ducking state
             music.isDucking = self.originalMusicDucking
