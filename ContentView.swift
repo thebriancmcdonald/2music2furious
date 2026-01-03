@@ -325,10 +325,10 @@ struct TrackInfoView: View {
             
             Text(String(format: "%.1fx", player.playbackSpeed))
                 .font(.system(size: 12, weight: .bold, design: .monospaced))
-                .foregroundColor(isActive ? .green : .white.opacity(0.5))
+                .foregroundColor(.white)
                 .padding(.horizontal, 8).padding(.vertical, 4)
-                .background(Capsule().fill(isActive ? Color.green.opacity(0.15) : Color.white.opacity(0.1)))
-                .overlay(Capsule().stroke(isActive ? Color.green.opacity(0.5) : Color.white.opacity(0.1), lineWidth: 1))
+                .background(Capsule().fill(isActive ? Color(red: 0.50, green: 0.42, blue: 0.60) : Color.white.opacity(0.25)))
+                .overlay(Capsule().stroke(isActive ? Color.royalPurple : Color.white.opacity(0.2), lineWidth: 1))
                 .contentShape(Rectangle())
                 .overlay(
                     Group {
@@ -384,7 +384,7 @@ struct VerticalSpeedSlider: View {
                         .fill(Color.black.opacity(0.3))
                         .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.1), lineWidth: 1))
                     RoundedRectangle(cornerRadius: 12)
-                        .fill(LinearGradient(colors: [.green, .mint], startPoint: .bottom, endPoint: .top))
+                        .fill(LinearGradient(colors: [Color.deepResumePurple, Color.royalPurple], startPoint: .bottom, endPoint: .top))
                         .frame(height: max(0, min(height, height * progress)))
                 }
                 .contentShape(Rectangle())
@@ -596,12 +596,12 @@ struct MusicModeToggle: View {
                 }
                 .foregroundColor(isDucking ? .white : .white.opacity(0.5))
                 .padding(.horizontal, 8).padding(.vertical, 5)
-                .background(isDucking ? Color.white.opacity(0.25) : Color.clear)
+                .background(isDucking ? Color(red: 0.50, green: 0.42, blue: 0.60) : Color.clear)
             }
         }
         .background(Color.black.opacity(0.3))
         .clipShape(Capsule())
-        .overlay(Capsule().stroke(Color.white.opacity(0.2), lineWidth: 1))
+        .overlay(Capsule().stroke(isDucking ? Color.royalPurple : Color.white.opacity(0.2), lineWidth: 1))
     }
 }
 
@@ -627,7 +627,7 @@ struct SpeechModeToggle: View {
                 }
                 .foregroundColor(audioMode == .boost ? .white : .white.opacity(0.5))
                 .padding(.horizontal, 8).padding(.vertical, 5)
-                .background(audioMode == .boost ? Color.deepResumePurple : Color.clear)
+                .background(audioMode == .boost ? Color(red: 0.50, green: 0.42, blue: 0.60) : Color.clear)
             }
         }
         .background(Color.black.opacity(0.3))
