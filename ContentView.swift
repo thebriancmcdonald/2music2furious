@@ -44,14 +44,16 @@ struct ContentView: View {
         ZStack {
             backgroundGradient
             
-            VStack(spacing: 12) {
-                header.padding(.top, 4)
+            VStack(spacing: 0) {
+                header
+                Spacer().frame(height: 16)
                 musicPanel.frame(maxWidth: .infinity, maxHeight: .infinity)
+                Spacer().frame(height: 16)
                 speechPanel.frame(maxWidth: .infinity, maxHeight: .infinity)
-                Color.clear.frame(height: 2)
+                Spacer().frame(height: 16)
             }
-            .padding(.horizontal)
-            .padding(.bottom, 8)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 16)
         }
         .preferredColorScheme(.dark)
         .sheet(isPresented: $showingMusicLibrary) {
@@ -115,16 +117,28 @@ struct ContentView: View {
     }
     
     // MARK: - Header
-    
+
     private var header: some View {
         HStack {
-            Text("2 MUSIC 2 FURIOUS")
-                .font(.system(size: 20, weight: .heavy, design: .rounded))
-                .foregroundColor(.white)
-                .shadow(color: .cyan.opacity(0.5), radius: 10, x: 0, y: 0)
-            
+            HStack(spacing: 10) {
+                AppIconView()
+                    .frame(width: 36, height: 36)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+
+                VStack(alignment: .leading, spacing: 0) {
+                    Text("2 MUSIC")
+                        .font(.system(size: 14, weight: .heavy, design: .rounded))
+                        .foregroundColor(.white)
+                        .shadow(color: .cyan.opacity(0.5), radius: 10, x: 0, y: 0)
+                    Text("2 FURIOUS")
+                        .font(.system(size: 14, weight: .heavy, design: .rounded))
+                        .foregroundColor(.white)
+                        .shadow(color: .cyan.opacity(0.5), radius: 10, x: 0, y: 0)
+                }
+            }
+
             Spacer()
-            
+
             Button(action: {
                 let anyPlaying = musicPlayer.isPlaying || speechPlayer.isPlaying
                 if anyPlaying {
@@ -147,8 +161,6 @@ struct ContentView: View {
                 .background(Capsule().fill(.ultraThinMaterial).overlay(Capsule().stroke(.white.opacity(0.3), lineWidth: 1)))
             }
         }
-        .padding(.horizontal)
-        .padding(.vertical, 8)
     }
     
     // MARK: - Music Panel
@@ -621,5 +633,39 @@ struct SpeechModeToggle: View {
         .background(Color.black.opacity(0.3))
         .clipShape(Capsule())
         .overlay(Capsule().stroke(audioMode == .boost ? Color.royalPurple : Color.white.opacity(0.2), lineWidth: 1))
+    }
+}
+
+// MARK: - App Icon View
+
+struct AppIconView: View {
+    var body: some View {
+        if let icon = loadAppIcon() {
+            Image(uiImage: icon)
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+        } else {
+            // Fallback gradient with "2" if icon not found
+            ZStack {
+                LinearGradient(
+                    colors: [Color.purple, Color.pink],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+                Text("2")
+                    .font(.system(size: 20, weight: .bold, design: .rounded))
+                    .foregroundColor(.white)
+            }
+        }
+    }
+
+    private func loadAppIcon() -> UIImage? {
+        guard let iconsDictionary = Bundle.main.infoDictionary?["CFBundleIcons"] as? [String: Any],
+              let primaryIconDictionary = iconsDictionary["CFBundlePrimaryIcon"] as? [String: Any],
+              let iconFiles = primaryIconDictionary["CFBundleIconFiles"] as? [String],
+              let lastIcon = iconFiles.last else {
+            return nil
+        }
+        return UIImage(named: lastIcon)
     }
 }
