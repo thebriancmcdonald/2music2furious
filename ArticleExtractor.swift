@@ -101,33 +101,112 @@ class ArticleExtractor: NSObject {
     }
     
     // MARK: - SwiftSoup HTML Parsing
-    
+
     struct ParsedHTML {
         let plainText: String
         let spans: [FormattingSpan]
     }
-    
+
     /// Parses clean HTML from Readability into plain text + formatting spans
     static func parseHTMLWithSwiftSoup(html: String, baseURL: URL?) throws -> ParsedHTML {
-        let doc = try SwiftSoup.parse(html)
-        
+        // First decode any HTML entities in the raw HTML before parsing
+        let decodedHTML = decodeHTMLEntities(html)
+        let doc = try SwiftSoup.parse(decodedHTML)
+
         var plainText = ""
         var spans: [FormattingSpan] = []
-        
+
         // Process the body (or root element)
         if let body = doc.body() {
-            try processNode(body, plainText: &plainText, spans: &spans, baseURL: baseURL, activeStyles: [])
+            var needsSpaceBefore = false
+            try processNode(body, plainText: &plainText, spans: &spans, baseURL: baseURL, activeStyles: [], needsSpaceBefore: &needsSpaceBefore)
         }
-        
+
         // Clean up trailing whitespace
         plainText = plainText.trimmingCharacters(in: .whitespacesAndNewlines)
-        
+
         // Final newline cleanup - collapse 3+ newlines into 2
         while plainText.contains("\n\n\n") {
             plainText = plainText.replacingOccurrences(of: "\n\n\n", with: "\n\n")
         }
-        
+
+        // Final pass: decode any remaining HTML entities in the plain text
+        plainText = decodeHTMLEntities(plainText)
+
         return ParsedHTML(plainText: plainText, spans: spans)
+    }
+
+    /// Decodes HTML entities like &#x27; &amp; &quot; etc. to their actual characters
+    private static func decodeHTMLEntities(_ string: String) -> String {
+        var result = string
+
+        // Decode numeric entities (hex): &#x27; &#x2019; etc.
+        let hexPattern = "&#x([0-9A-Fa-f]+);"
+        if let regex = try? NSRegularExpression(pattern: hexPattern) {
+            let range = NSRange(result.startIndex..., in: result)
+            let matches = regex.matches(in: result, range: range).reversed()
+            for match in matches {
+                if let hexRange = Range(match.range(at: 1), in: result),
+                   let codePoint = UInt32(result[hexRange], radix: 16),
+                   let scalar = Unicode.Scalar(codePoint) {
+                    let char = String(Character(scalar))
+                    if let fullRange = Range(match.range, in: result) {
+                        result.replaceSubrange(fullRange, with: char)
+                    }
+                }
+            }
+        }
+
+        // Decode numeric entities (decimal): &#39; &#8217; etc.
+        let decPattern = "&#([0-9]+);"
+        if let regex = try? NSRegularExpression(pattern: decPattern) {
+            let range = NSRange(result.startIndex..., in: result)
+            let matches = regex.matches(in: result, range: range).reversed()
+            for match in matches {
+                if let decRange = Range(match.range(at: 1), in: result),
+                   let codePoint = UInt32(result[decRange]),
+                   let scalar = Unicode.Scalar(codePoint) {
+                    let char = String(Character(scalar))
+                    if let fullRange = Range(match.range, in: result) {
+                        result.replaceSubrange(fullRange, with: char)
+                    }
+                }
+            }
+        }
+
+        // Decode common named entities
+        let namedEntities: [String: String] = [
+            "&amp;": "&",
+            "&lt;": "<",
+            "&gt;": ">",
+            "&quot;": "\"",
+            "&apos;": "'",
+            "&nbsp;": " ",
+            "&ndash;": "–",
+            "&mdash;": "—",
+            "&lsquo;": "'",
+            "&rsquo;": "'",
+            "&ldquo;": "\u{201C}",
+            "&rdquo;": "\u{201D}",
+            "&hellip;": "…",
+            "&copy;": "©",
+            "&reg;": "®",
+            "&trade;": "™",
+            "&bull;": "•",
+            "&middot;": "·",
+            "&times;": "×",
+            "&divide;": "÷",
+            "&euro;": "€",
+            "&pound;": "£",
+            "&yen;": "¥",
+            "&cent;": "¢",
+        ]
+
+        for (entity, replacement) in namedEntities {
+            result = result.replacingOccurrences(of: entity, with: replacement)
+        }
+
+        return result
     }
     
     /// Recursively processes DOM nodes, building plain text and tracking formatting
@@ -136,27 +215,47 @@ class ArticleExtractor: NSObject {
         plainText: inout String,
         spans: inout [FormattingSpan],
         baseURL: URL?,
-        activeStyles: [(style: FormattingStyle, start: Int, url: String?)]
+        activeStyles: [(style: FormattingStyle, start: Int, url: String?)],
+        needsSpaceBefore: inout Bool
     ) throws {
-        
+
         // Handle text nodes
         if let textNode = node as? TextNode {
             let text = textNode.text()
-            
+
             // Collapse whitespace but preserve structure
             let cleaned = text.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
-            
-            if !cleaned.trimmingCharacters(in: .whitespaces).isEmpty {
-                // Only add space if needed
-                if cleaned.hasPrefix(" ") && !plainText.isEmpty && !plainText.hasSuffix(" ") && !plainText.hasSuffix("\n") {
-                    plainText.append(" ")
+
+            // Check if this text node is whitespace-only (important for spacing between inline elements)
+            let isWhitespaceOnly = cleaned.trimmingCharacters(in: .whitespaces).isEmpty
+
+            if isWhitespaceOnly {
+                // Mark that the next text needs a space before it
+                if !cleaned.isEmpty {
+                    needsSpaceBefore = true
                 }
-                
-                plainText.append(cleaned.trimmingCharacters(in: .whitespaces))
-                
-                if cleaned.hasSuffix(" ") {
-                    plainText.append(" ")
-                }
+                return
+            }
+
+            // We have actual content
+            let trimmed = cleaned.trimmingCharacters(in: .whitespaces)
+
+            // Add space before if needed (from previous whitespace-only node or leading space)
+            let shouldAddSpaceBefore = (needsSpaceBefore || cleaned.hasPrefix(" ")) &&
+                                        !plainText.isEmpty &&
+                                        !plainText.hasSuffix(" ") &&
+                                        !plainText.hasSuffix("\n")
+
+            if shouldAddSpaceBefore {
+                plainText.append(" ")
+            }
+            needsSpaceBefore = false
+
+            plainText.append(trimmed)
+
+            // Track trailing space for next node
+            if cleaned.hasSuffix(" ") {
+                needsSpaceBefore = true
             }
             return
         }
@@ -188,15 +287,19 @@ class ArticleExtractor: NSObject {
         case "h1":
             tagStyle = .header1
             ensureNewline(&plainText)
+            needsSpaceBefore = false
         case "h2":
             tagStyle = .header2
             ensureNewline(&plainText)
+            needsSpaceBefore = false
         case "h3", "h4", "h5", "h6":
             tagStyle = .header3
             ensureNewline(&plainText)
+            needsSpaceBefore = false
         case "blockquote":
             tagStyle = .blockquote
             ensureNewline(&plainText)
+            needsSpaceBefore = false
         case "a":
             tagStyle = .link
             linkURL = try? element.attr("href")
@@ -213,16 +316,21 @@ class ArticleExtractor: NSObject {
         case "pre":
             tagStyle = .preformatted
             ensureNewline(&plainText)
+            needsSpaceBefore = false
         case "li":
             ensureNewline(&plainText)
+            needsSpaceBefore = false
             plainText.append("• ")
         case "p", "div":
             ensureParagraphBreak(&plainText)
+            needsSpaceBefore = false
         case "br":
             plainText.append("\n")
+            needsSpaceBefore = false
         case "hr":
             ensureNewline(&plainText)
             plainText.append("───\n")
+            needsSpaceBefore = false
         default:
             break
         }
@@ -234,7 +342,7 @@ class ArticleExtractor: NSObject {
         
         // Process children
         for child in node.getChildNodes() {
-            try processNode(child, plainText: &plainText, spans: &spans, baseURL: baseURL, activeStyles: newActiveStyles)
+            try processNode(child, plainText: &plainText, spans: &spans, baseURL: baseURL, activeStyles: newActiveStyles, needsSpaceBefore: &needsSpaceBefore)
         }
         
         // Pop style and create span
@@ -256,10 +364,12 @@ class ArticleExtractor: NSObject {
         switch tagName {
         case "p", "div", "blockquote", "pre", "h1", "h2", "h3", "h4", "h5", "h6":
             ensureParagraphBreak(&plainText)
+            needsSpaceBefore = false  // Reset after block element
         case "li":
             if !plainText.hasSuffix("\n") {
                 plainText.append("\n")
             }
+            needsSpaceBefore = false  // Reset after list item
         default:
             break
         }

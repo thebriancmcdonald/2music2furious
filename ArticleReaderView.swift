@@ -26,15 +26,16 @@ struct ArticleReaderView: View {
 
     // Voice Settings - Expandable Sections
     // Note: Siri voices not available via AVSpeechSynthesizer API (Apple restriction)
-    @State private var showPremiumVoices = true
+    // All voice sections collapsed by default
+    @State private var showPremiumVoices = false
     @State private var showEnhancedVoices = false
     @State private var showDefaultVoices = false
     @State private var showDownloadConfirmation = false
     @State private var pendingDownloadVoiceName: String = ""
 
     // Appearance Settings
-    @State private var lineSpacing: CGFloat = 8.0
-    @State private var paragraphSpacing: CGFloat = 8.0
+    @State private var lineSpacing: CGFloat = 6.0
+    @State private var paragraphSpacing: CGFloat = 0.0  // Paragraphs already have \n\n from extraction
 
     var currentChapter: ArticleChapter {
         guard article.chapters.indices.contains(currentChapterIndex) else {
@@ -43,13 +44,12 @@ struct ArticleReaderView: View {
         return article.chapters[currentChapterIndex]
     }
     
-    // CRITICAL FIX: Centralized Content Cleaning
-    // We must use EXACTLY the same string for both the Visual Text and the TTS Engine.
-    // If we clean one but not the other, the character indices drift, causing "half-word" highlighting.
-    var cleanedContent: String {
+    // CRITICAL: Use the EXACT content string that spans were indexed against.
+    // FormattingSpans are character indices into currentChapter.content.
+    // Any modification (like replacing \n\n with \n) will misalign the spans.
+    // The ArticleExtractor already handles newline normalization, so we use content as-is.
+    var displayContent: String {
         return currentChapter.content
-            .replacingOccurrences(of: "\n\n", with: "\n")
-            .replacingOccurrences(of: "\r\n\r\n", with: "\n")
     }
 
     var body: some View {
@@ -64,13 +64,17 @@ struct ArticleReaderView: View {
                     author: article.author,
                     source: article.displaySource,
                     chapterTitle: article.chapters.count > 1 ? currentChapter.title : nil,
-                    content: cleanedContent, // Pass the CLEANED content
+                    content: displayContent,
+                    formattingSpans: currentChapter.formattingSpans,
                     highlightRange: tts.currentWordRange,
                     isPlaying: tts.isPlaying,
                     lineSpacing: lineSpacing,
                     paragraphSpacing: paragraphSpacing,
                     onTapWord: { position in
                         tts.seekAndPlay(to: position)
+                    },
+                    onLinkTapped: { url in
+                        UIApplication.shared.open(url)
                     }
                 )
                 .id("reader_L\(Int(lineSpacing))_P\(Int(paragraphSpacing))_\(currentChapter.id)")
@@ -135,10 +139,9 @@ struct ArticleReaderView: View {
     // MARK: - TTS Helpers
     private func loadChapterForTTS() {
         tts.stop()
-        // CRITICAL FIX: Load the CLEANED content into TTS.
-        // Now indices match the visual view 1:1.
-        tts.loadText(cleanedContent)
-        
+        // Use displayContent - same string used for visual display and span indices
+        tts.loadText(displayContent)
+
         if currentChapterIndex == article.lastReadChapter && article.lastReadPosition > 0 {
             tts.seek(to: article.lastReadPosition)
         }
@@ -294,19 +297,7 @@ struct ArticleReaderView: View {
                 )
             }
         }
-        .onAppear {
-            // Auto-expand the best available tier
-            let hasPremium = !TTSManager.premiumVoices.isEmpty
-            let hasEnhanced = !TTSManager.enhancedVoices.isEmpty
-
-            if hasPremium {
-                showPremiumVoices = true
-            } else if hasEnhanced {
-                showEnhancedVoices = true
-            } else {
-                showDefaultVoices = true
-            }
-        }
+        // All voice sections start collapsed - user can expand as needed
     }
 
     // Voice quality tier enum for styling
@@ -567,9 +558,9 @@ struct ArticleReaderView: View {
                         .foregroundColor(.white.opacity(0.9))
 
                     HStack(spacing: 8) {
-                        spacingButton(title: "Tight", value: 4.0, selection: $lineSpacing)
-                        spacingButton(title: "Normal", value: 8.0, selection: $lineSpacing)
-                        spacingButton(title: "Relaxed", value: 14.0, selection: $lineSpacing)
+                        spacingButton(title: "Tight", value: 2.0, selection: $lineSpacing)
+                        spacingButton(title: "Normal", value: 6.0, selection: $lineSpacing)
+                        spacingButton(title: "Relaxed", value: 12.0, selection: $lineSpacing)
                     }
                 }
 
@@ -580,9 +571,9 @@ struct ArticleReaderView: View {
                         .foregroundColor(.white.opacity(0.9))
 
                     HStack(spacing: 8) {
-                        spacingButton(title: "Tight", value: 8.0, selection: $paragraphSpacing)
-                        spacingButton(title: "Normal", value: 16.0, selection: $paragraphSpacing)
-                        spacingButton(title: "Relaxed", value: 24.0, selection: $paragraphSpacing)
+                        spacingButton(title: "Compact", value: 0.0, selection: $paragraphSpacing)
+                        spacingButton(title: "Normal", value: 6.0, selection: $paragraphSpacing)
+                        spacingButton(title: "Relaxed", value: 14.0, selection: $paragraphSpacing)
                     }
                 }
             }
@@ -686,64 +677,70 @@ struct UnifiedReaderTextView: UIViewRepresentable {
     let source: String
     let chapterTitle: String?
     let content: String
+    let formattingSpans: [FormattingSpan]?
     let highlightRange: NSRange
     let isPlaying: Bool
-    
+
     let lineSpacing: CGFloat
     let paragraphSpacing: CGFloat
-    
+
     let onTapWord: (Int) -> Void
-    
+    let onLinkTapped: ((URL) -> Void)?
+
     private let contentOffset: Int
     private let fullAttributedText: NSAttributedString
-    
+
     init(articleTitle: String,
          author: String?,
          source: String,
          chapterTitle: String?,
          content: String,
+         formattingSpans: [FormattingSpan]? = nil,
          highlightRange: NSRange,
          isPlaying: Bool,
          lineSpacing: CGFloat,
          paragraphSpacing: CGFloat,
-         onTapWord: @escaping (Int) -> Void) {
-        
+         onTapWord: @escaping (Int) -> Void,
+         onLinkTapped: ((URL) -> Void)? = nil) {
+
         self.articleTitle = articleTitle
         self.author = author
         self.source = source
         self.chapterTitle = chapterTitle
         self.content = content
+        self.formattingSpans = formattingSpans
         self.highlightRange = highlightRange
         self.isPlaying = isPlaying
         self.lineSpacing = lineSpacing
         self.paragraphSpacing = paragraphSpacing
         self.onTapWord = onTapWord
-        
+        self.onLinkTapped = onLinkTapped
+
         // Construct Full Text
         let combined = NSMutableAttributedString()
-        
+
         // -- HEADER --
         let headerStyle = NSMutableParagraphStyle()
         headerStyle.alignment = .left
         headerStyle.paragraphSpacing = 8
-        
+
         let titleAttrs: [NSAttributedString.Key: Any] = [
             .font: UIFont.systemFont(ofSize: 28, weight: .bold),
             .foregroundColor: UIColor.label,
             .paragraphStyle: headerStyle
         ]
         combined.append(NSAttributedString(string: articleTitle + "\n", attributes: titleAttrs))
-        
+
         let metaAttrs: [NSAttributedString.Key: Any] = [
             .font: UIFont.preferredFont(forTextStyle: .subheadline),
             .foregroundColor: UIColor.secondaryLabel,
             .paragraphStyle: headerStyle
         ]
-        
+
         var metaString = source
         if let auth = author { metaString += " • \(auth)" }
         combined.append(NSAttributedString(string: metaString + "\n\n", attributes: metaAttrs))
-        
+
         if let chTitle = chapterTitle {
             let chAttrs: [NSAttributedString.Key: Any] = [
                 .font: UIFont.systemFont(ofSize: 20, weight: .semibold),
@@ -752,22 +749,83 @@ struct UnifiedReaderTextView: UIViewRepresentable {
             ]
             combined.append(NSAttributedString(string: chTitle + "\n\n", attributes: chAttrs))
         }
-        
+
         self.contentOffset = combined.length
-        
+
         // -- BODY --
         let bodyStyle = NSMutableParagraphStyle()
         bodyStyle.lineSpacing = lineSpacing
         bodyStyle.paragraphSpacing = paragraphSpacing
-        
+
         let bodyAttrs: [NSAttributedString.Key: Any] = [
             .font: UIFont.systemFont(ofSize: 18, weight: .regular),
             .foregroundColor: UIColor.label,
             .paragraphStyle: bodyStyle
         ]
-        
+
         // Content is already cleaned by parent view
-        combined.append(NSAttributedString(string: content, attributes: bodyAttrs))
+        let bodyText = NSMutableAttributedString(string: content, attributes: bodyAttrs)
+
+        // Apply formatting spans
+        if let spans = formattingSpans {
+            let baseFont = UIFont.systemFont(ofSize: 18, weight: .regular)
+            let boldFont = UIFont.systemFont(ofSize: 18, weight: .bold)
+            let italicFont = UIFont.italicSystemFont(ofSize: 18)
+            let boldItalicFont = UIFont(descriptor: baseFont.fontDescriptor.withSymbolicTraits([.traitBold, .traitItalic]) ?? baseFont.fontDescriptor, size: 18)
+            let codeFont = UIFont.monospacedSystemFont(ofSize: 16, weight: .regular)
+
+            for span in spans {
+                // Convert character indices to NSRange safely
+                guard span.location >= 0, span.length > 0 else { continue }
+                let endLocation = span.location + span.length
+                guard endLocation <= content.count else { continue }
+
+                let startIdx = content.index(content.startIndex, offsetBy: span.location)
+                let endIdx = content.index(content.startIndex, offsetBy: endLocation)
+                let nsRange = NSRange(startIdx..<endIdx, in: content)
+
+                guard nsRange.location != NSNotFound, nsRange.location + nsRange.length <= bodyText.length else { continue }
+
+                switch span.style {
+                case .bold:
+                    bodyText.addAttribute(.font, value: boldFont, range: nsRange)
+                case .italic:
+                    bodyText.addAttribute(.font, value: italicFont, range: nsRange)
+                case .boldItalic:
+                    bodyText.addAttribute(.font, value: boldItalicFont, range: nsRange)
+                case .header1:
+                    let h1Font = UIFont.systemFont(ofSize: 26, weight: .bold)
+                    bodyText.addAttribute(.font, value: h1Font, range: nsRange)
+                case .header2:
+                    let h2Font = UIFont.systemFont(ofSize: 22, weight: .bold)
+                    bodyText.addAttribute(.font, value: h2Font, range: nsRange)
+                case .header3:
+                    let h3Font = UIFont.systemFont(ofSize: 19, weight: .semibold)
+                    bodyText.addAttribute(.font, value: h3Font, range: nsRange)
+                case .blockquote:
+                    bodyText.addAttribute(.foregroundColor, value: UIColor.secondaryLabel, range: nsRange)
+                    bodyText.addAttribute(.font, value: italicFont, range: nsRange)
+                case .link:
+                    bodyText.addAttribute(.foregroundColor, value: UIColor.systemBlue, range: nsRange)
+                    bodyText.addAttribute(.underlineStyle, value: NSUnderlineStyle.single.rawValue, range: nsRange)
+                    if let urlString = span.url, let url = URL(string: urlString) {
+                        bodyText.addAttribute(.link, value: url, range: nsRange)
+                    }
+                case .code, .preformatted:
+                    bodyText.addAttribute(.font, value: codeFont, range: nsRange)
+                    bodyText.addAttribute(.backgroundColor, value: UIColor.systemGray5, range: nsRange)
+                case .listItem:
+                    break // List items are already formatted with bullets in text
+                case .caption:
+                    // Captions: smaller, italic, gray - visible but distinct
+                    let captionFont = UIFont.italicSystemFont(ofSize: 14)
+                    bodyText.addAttribute(.font, value: captionFont, range: nsRange)
+                    bodyText.addAttribute(.foregroundColor, value: UIColor.tertiaryLabel, range: nsRange)
+                }
+            }
+        }
+
+        combined.append(bodyText)
         self.fullAttributedText = combined
     }
 

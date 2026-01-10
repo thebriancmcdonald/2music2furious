@@ -25,6 +25,7 @@ enum FormattingStyle: String, Codable, Equatable {
     case link
     case code
     case preformatted
+    case caption      // Image captions - displayed but skipped in TTS
 }
 
 /// A span of formatting applied to a range of plain text
