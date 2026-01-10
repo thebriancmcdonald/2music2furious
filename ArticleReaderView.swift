@@ -3,18 +3,14 @@
 //  2 Music 2 Furious
 //
 //  Full-screen article reader with text-to-speech
-//  RICH TEXT UPDATE: Applies FormattingSpans for Instapaper-style reading
-//  
-//  Key Features:
-//  - Rich formatting (bold, italic, headers, blockquotes, links)
-//  - TTS sync preserved (plain text indices match display)
-//  - Tappable links open in Safari
-//  - Word highlighting during playback
+//  Fixed:
+//  - "Half Word" highlighting bug (Text/TTS Synchronization)
+//  - Word Snapping for cleaner visuals
+//  - Scroll, Buttons, and Layout fully working
 //
 
 import SwiftUI
 import AVFoundation
-import UIKit
 
 struct ArticleReaderView: View {
     let article: Article
@@ -27,7 +23,15 @@ struct ArticleReaderView: View {
     @State private var currentChapterIndex: Int = 0
     @State private var showingChapterList = false
     @State private var showingSettings = false
-    
+
+    // Voice Settings - Expandable Sections
+    // Note: Siri voices not available via AVSpeechSynthesizer API (Apple restriction)
+    @State private var showPremiumVoices = true
+    @State private var showEnhancedVoices = false
+    @State private var showDefaultVoices = false
+    @State private var showDownloadConfirmation = false
+    @State private var pendingDownloadVoiceName: String = ""
+
     // Appearance Settings
     @State private var lineSpacing: CGFloat = 8.0
     @State private var paragraphSpacing: CGFloat = 8.0
@@ -39,24 +43,13 @@ struct ArticleReaderView: View {
         return article.chapters[currentChapterIndex]
     }
     
-    // Content for display and TTS
-    // The ArticleExtractor already handles whitespace normalization,
-    // so we use content directly when we have formatting spans.
+    // CRITICAL FIX: Centralized Content Cleaning
+    // We must use EXACTLY the same string for both the Visual Text and the TTS Engine.
+    // If we clean one but not the other, the character indices drift, causing "half-word" highlighting.
     var cleanedContent: String {
-        // With rich formatting, use content as-is (spans are aligned to it)
-        if currentChapter.formattingSpans != nil && !currentChapter.formattingSpans!.isEmpty {
-            return currentChapter.content
-        }
-        
-        // Legacy plain-text articles: minimal cleanup
         return currentChapter.content
-    }
-    
-    // Formatting spans adjusted for cleaned content (if needed)
-    var adjustedSpans: [FormattingSpan]? {
-        // For now, spans should already align with content
-        // If cleaning changes indices, we'd need to adjust here
-        return currentChapter.formattingSpans
+            .replacingOccurrences(of: "\n\n", with: "\n")
+            .replacingOccurrences(of: "\r\n\r\n", with: "\n")
     }
 
     var body: some View {
@@ -65,23 +58,19 @@ struct ArticleReaderView: View {
             GlassBackgroundView(primaryColor: .royalPurple, secondaryColor: .blue)
 
             VStack(spacing: 0) {
-                // RICH TEXT READER VIEW
-                RichTextReaderView(
+                // UNIFIED READER VIEW
+                UnifiedReaderTextView(
                     articleTitle: article.title,
                     author: article.author,
                     source: article.displaySource,
                     chapterTitle: article.chapters.count > 1 ? currentChapter.title : nil,
-                    content: cleanedContent,
-                    formattingSpans: adjustedSpans,
+                    content: cleanedContent, // Pass the CLEANED content
                     highlightRange: tts.currentWordRange,
                     isPlaying: tts.isPlaying,
                     lineSpacing: lineSpacing,
                     paragraphSpacing: paragraphSpacing,
                     onTapWord: { position in
                         tts.seekAndPlay(to: position)
-                    },
-                    onTapLink: { url in
-                        UIApplication.shared.open(url)
                     }
                 )
                 .id("reader_L\(Int(lineSpacing))_P\(Int(paragraphSpacing))_\(currentChapter.id)")
@@ -146,7 +135,8 @@ struct ArticleReaderView: View {
     // MARK: - TTS Helpers
     private func loadChapterForTTS() {
         tts.stop()
-        // Load the CLEANED content into TTS - indices match the visual view
+        // CRITICAL FIX: Load the CLEANED content into TTS.
+        // Now indices match the visual view 1:1.
         tts.loadText(cleanedContent)
         
         if currentChapterIndex == article.lastReadChapter && article.lastReadPosition > 0 {
@@ -210,79 +200,403 @@ struct ArticleReaderView: View {
     // MARK: - Settings Overlay
     private var settingsOverlay: some View {
         ZStack {
-            Color.black.opacity(0.5).ignoresSafeArea().onTapGesture { showingSettings = false }
+            Color.black.opacity(0.5)
+                .ignoresSafeArea()
+                .onTapGesture { showingSettings = false }
+
             VStack(spacing: 0) {
+                // Header
                 HStack {
-                    Text("Reader Settings").font(.headline)
+                    Text("Reader Settings")
+                        .font(.headline)
+                        .foregroundColor(.primary)
                     Spacer()
                     Button(action: { showingSettings = false }) {
-                        Image(systemName: "xmark.circle.fill").font(.system(size: 24)).foregroundColor(.secondary)
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 24))
+                            .foregroundColor(.secondary)
                     }
                 }
-                .padding()
+                .padding(.horizontal, 20)
+                .padding(.top, 20)
+                .padding(.bottom, 12)
+
                 Divider()
-                
+                    .background(Color.white.opacity(0.1))
+
                 ScrollView {
-                    VStack(spacing: 24) {
-                        // Voice Section
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Voice").font(.subheadline.weight(.semibold)).foregroundColor(.secondary)
-                            ScrollView(.horizontal, showsIndicators: false) {
-                                HStack(spacing: 8) {
-                                    ForEach(TTSManager.availableVoices.prefix(6), id: \.identifier) { voice in
-                                        Button(action: { tts.selectedVoiceIdentifier = voice.identifier }) {
-                                            VStack(spacing: 4) {
-                                                Text(voice.name).font(.system(size: 12, weight: .medium)).lineLimit(1)
-                                            }
-                                            .padding(.horizontal, 12).padding(.vertical, 8)
-                                            .background(tts.selectedVoiceIdentifier == voice.identifier ? Color.royalPurple : Color.white.opacity(0.1))
-                                            .foregroundColor(.white).cornerRadius(8)
-                                        }
-                                    }
-                                }
-                                .padding(.horizontal)
-                            }
-                        }
-                        
-                        // Line Spacing
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Line Spacing").font(.subheadline.weight(.semibold)).foregroundColor(.secondary)
-                            HStack(spacing: 12) {
-                                spacingButton(title: "Tight", value: 4.0, selection: $lineSpacing)
-                                spacingButton(title: "Normal", value: 8.0, selection: $lineSpacing)
-                                spacingButton(title: "Relaxed", value: 14.0, selection: $lineSpacing)
-                            }
-                            .padding(.horizontal)
-                        }
-                        
-                        // Paragraph Spacing
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Paragraph Spacing").font(.subheadline.weight(.semibold)).foregroundColor(.secondary)
-                            HStack(spacing: 12) {
-                                spacingButton(title: "Tight", value: 8.0, selection: $paragraphSpacing)
-                                spacingButton(title: "Normal", value: 16.0, selection: $paragraphSpacing)
-                                spacingButton(title: "Relaxed", value: 24.0, selection: $paragraphSpacing)
-                            }
-                            .padding(.horizontal)
-                        }
-                        
-                        // Speed
-                        VStack(alignment: .leading, spacing: 8) {
-                            HStack {
-                                Text("Speed").font(.subheadline.weight(.semibold)).foregroundColor(.secondary)
-                                Spacer()
-                                Text("\(String(format: "%.2f", tts.playbackSpeed))x").font(.system(size: 14, weight: .bold, design: .monospaced)).foregroundColor(.royalPurple)
-                            }
-                            Slider(value: Binding(get: { Double(tts.playbackSpeed) }, set: { tts.playbackSpeed = Float($0) }), in: 0.5...2.0, step: 0.25).tint(.royalPurple)
-                        }
-                        .padding(.horizontal)
+                    VStack(spacing: 0) {
+                        // MARK: Voice Section
+                        voiceSection
+                            .padding(.top, 16)
+
+                        // Divider
+                        sectionDivider
+
+                        // MARK: Playback Speed Section
+                        speedSection
+
+                        // Divider
+                        sectionDivider
+
+                        // MARK: Text Appearance Section
+                        textAppearanceSection
+                            .padding(.bottom, 24)
                     }
-                    .padding(.vertical, 20)
                 }
             }
-            .frame(maxHeight: 500)
-            .background(.ultraThinMaterial).cornerRadius(20).padding(.horizontal, 20)
+            .frame(maxHeight: UIScreen.main.bounds.height * 0.75)
+            .background(.ultraThinMaterial)
+            .cornerRadius(20)
+            .padding(.horizontal, 20)
         }
+        .alert("Download \(pendingDownloadVoiceName) Voices", isPresented: $showDownloadConfirmation) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text("To get \(pendingDownloadVoiceName.lowercased()) voices:\n\n1. Open the Settings app\n2. Go to Accessibility\n3. Tap Spoken Content\n4. Tap Voices\n5. Select English\n6. Download voices (look for \(pendingDownloadVoiceName))\n\nReturn here after downloading.")
+        }
+    }
+
+    // MARK: - Voice Section
+    // Note: Siri voices are NOT available to third-party apps via AVSpeechSynthesizer (Apple restriction)
+    // We only show Premium, Enhanced, and Standard tiers
+    private var voiceSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("VOICE")
+                .font(.caption.weight(.semibold))
+                .foregroundColor(.secondary)
+                .padding(.horizontal, 20)
+
+            VStack(spacing: 4) {
+                let premiumVoices = TTSManager.premiumVoices
+                let enhancedVoices = TTSManager.enhancedVoices
+                let standardVoices = TTSManager.standardVoices
+
+                // Premium Voices Section
+                voiceTierSection(
+                    tier: .premium,
+                    voices: premiumVoices,
+                    isExpanded: $showPremiumVoices
+                )
+
+                // Enhanced Voices Section
+                voiceTierSection(
+                    tier: .enhanced,
+                    voices: enhancedVoices,
+                    isExpanded: $showEnhancedVoices
+                )
+
+                // Standard Voices Section
+                voiceTierSection(
+                    tier: .standard,
+                    voices: standardVoices,
+                    isExpanded: $showDefaultVoices
+                )
+            }
+        }
+        .onAppear {
+            // Auto-expand the best available tier
+            let hasPremium = !TTSManager.premiumVoices.isEmpty
+            let hasEnhanced = !TTSManager.enhancedVoices.isEmpty
+
+            if hasPremium {
+                showPremiumVoices = true
+            } else if hasEnhanced {
+                showEnhancedVoices = true
+            } else {
+                showDefaultVoices = true
+            }
+        }
+    }
+
+    // Voice quality tier enum for styling
+    // Note: Siri voices are NOT available via AVSpeechSynthesizer API (Apple restriction)
+    private enum VoiceTier {
+        case premium
+        case enhanced
+        case standard
+
+        var title: String {
+            switch self {
+            case .premium: return "Premium"
+            case .enhanced: return "Enhanced"
+            case .standard: return "Standard"
+            }
+        }
+
+        var icon: String {
+            switch self {
+            case .premium: return "star.fill"
+            case .enhanced: return "wand.and.stars"
+            case .standard: return "speaker.wave.2"
+            }
+        }
+
+        var iconColor: Color {
+            switch self {
+            case .premium: return .yellow
+            case .enhanced: return .cyan
+            case .standard: return .gray
+            }
+        }
+
+        var description: String {
+            switch self {
+            case .premium: return "Highest quality, most natural"
+            case .enhanced: return "High quality voices"
+            case .standard: return "Basic system voices"
+            }
+        }
+    }
+
+    // MARK: - Voice Tier Section
+    private func voiceTierSection(
+        tier: VoiceTier,
+        voices: [AVSpeechSynthesisVoice],
+        isExpanded: Binding<Bool>
+    ) -> some View {
+        VStack(spacing: 0) {
+            // Header button
+            Button(action: {
+                if voices.isEmpty && tier != .standard {
+                    // Show download prompt for empty siri/premium/enhanced tiers
+                    pendingDownloadVoiceName = tier.title
+                    showDownloadConfirmation = true
+                } else if !voices.isEmpty {
+                    withAnimation(.easeInOut(duration: 0.25)) {
+                        isExpanded.wrappedValue.toggle()
+                    }
+                }
+            }) {
+                HStack(spacing: 10) {
+                    // Chevron (only show if has voices)
+                    if !voices.isEmpty {
+                        Image(systemName: isExpanded.wrappedValue ? "chevron.down" : "chevron.right")
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundColor(.secondary)
+                            .frame(width: 14)
+                    } else {
+                        // Download icon for empty tiers
+                        Image(systemName: "arrow.down.circle")
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundColor(tier != .standard ? tier.iconColor.opacity(0.7) : .secondary)
+                            .frame(width: 14)
+                    }
+
+                    // Tier icon
+                    Image(systemName: tier.icon)
+                        .font(.system(size: 14))
+                        .foregroundColor(voices.isEmpty ? tier.iconColor.opacity(0.5) : tier.iconColor)
+                        .frame(width: 20)
+
+                    // Title and count
+                    VStack(alignment: .leading, spacing: 1) {
+                        HStack(spacing: 6) {
+                            Text(tier.title)
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundColor(voices.isEmpty ? .white.opacity(0.5) : .white)
+
+                            if !voices.isEmpty {
+                                Text("(\(voices.count))")
+                                    .font(.system(size: 13))
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+
+                        if voices.isEmpty {
+                            Text(tier != .standard ? "Tap to download" : "None available")
+                                .font(.caption2)
+                                .foregroundColor(tier != .standard ? tier.iconColor.opacity(0.7) : .secondary)
+                        } else if !isExpanded.wrappedValue {
+                            Text(tier.description)
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+
+                    Spacer()
+
+                    // Download badge for empty premium/enhanced
+                    if voices.isEmpty && tier != .standard {
+                        Image(systemName: "square.and.arrow.down")
+                            .font(.system(size: 14))
+                            .foregroundColor(tier.iconColor.opacity(0.7))
+                    }
+                }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 12)
+                .background(
+                    RoundedRectangle(cornerRadius: 10)
+                        .fill(isExpanded.wrappedValue && !voices.isEmpty ? tier.iconColor.opacity(0.08) : Color.clear)
+                )
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(PlainButtonStyle())
+
+            // Expanded content
+            if isExpanded.wrappedValue && !voices.isEmpty {
+                VStack(spacing: 0) {
+                    ForEach(voices, id: \.identifier) { voice in
+                        voiceRow(voice: voice, tier: tier)
+                    }
+                }
+                .padding(.leading, 44) // Indent under the header
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+    }
+
+    // MARK: - Voice Row
+    private func voiceRow(voice: AVSpeechSynthesisVoice, tier: VoiceTier) -> some View {
+        let isSelected = tts.selectedVoiceIdentifier == voice.identifier
+        let metadata = TTSManager.voiceMetadata(for: voice)
+
+        return Button(action: {
+            tts.selectedVoiceIdentifier = voice.identifier
+        }) {
+            HStack(spacing: 12) {
+                // Selection indicator
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 18))
+                    .foregroundColor(isSelected ? tier.iconColor : .white.opacity(0.25))
+                    .frame(width: 22)
+
+                // Voice info
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(voice.name)
+                        .font(.system(size: 14, weight: isSelected ? .semibold : .regular))
+                        .foregroundColor(isSelected ? .white : .white.opacity(0.9))
+
+                    HStack(spacing: 4) {
+                        if !metadata.region.isEmpty {
+                            Text(metadata.region)
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
+                        if !metadata.gender.isEmpty {
+                            Text("•")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                            Text(metadata.gender)
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
+
+                Spacer()
+
+                // Preview button
+                Button(action: {
+                    tts.previewVoice(identifier: voice.identifier)
+                }) {
+                    Image(systemName: "play.circle.fill")
+                        .font(.system(size: 22))
+                        .foregroundColor(tier.iconColor.opacity(0.7))
+                }
+                .buttonStyle(PlainButtonStyle())
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            .background(
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(isSelected ? tier.iconColor.opacity(0.12) : Color.clear)
+            )
+            .padding(.trailing, 20)
+        }
+        .buttonStyle(PlainButtonStyle())
+    }
+
+    // MARK: - Speed Section
+    private var speedSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("PLAYBACK SPEED")
+                .font(.caption.weight(.semibold))
+                .foregroundColor(.secondary)
+                .padding(.horizontal, 20)
+
+            VStack(spacing: 8) {
+                HStack {
+                    Text("Speed")
+                        .font(.subheadline)
+                        .foregroundColor(.white.opacity(0.9))
+                    Spacer()
+                    Text("\(String(format: "%.2f", tts.playbackSpeed))×")
+                        .font(.system(size: 15, weight: .bold, design: .monospaced))
+                        .foregroundColor(.royalPurple)
+                }
+
+                Slider(
+                    value: Binding(
+                        get: { Double(tts.playbackSpeed) },
+                        set: { tts.playbackSpeed = Float($0) }
+                    ),
+                    in: 0.5...2.0,
+                    step: 0.05
+                )
+                .tint(.royalPurple)
+
+                HStack {
+                    Text("0.5×")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                    Spacer()
+                    Text("2.0×")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+            }
+            .padding(.horizontal, 20)
+        }
+        .padding(.vertical, 16)
+    }
+
+    // MARK: - Text Appearance Section
+    private var textAppearanceSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("TEXT APPEARANCE")
+                .font(.caption.weight(.semibold))
+                .foregroundColor(.secondary)
+                .padding(.horizontal, 20)
+
+            VStack(spacing: 16) {
+                // Line Spacing
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Line Spacing")
+                        .font(.subheadline)
+                        .foregroundColor(.white.opacity(0.9))
+
+                    HStack(spacing: 8) {
+                        spacingButton(title: "Tight", value: 4.0, selection: $lineSpacing)
+                        spacingButton(title: "Normal", value: 8.0, selection: $lineSpacing)
+                        spacingButton(title: "Relaxed", value: 14.0, selection: $lineSpacing)
+                    }
+                }
+
+                // Paragraph Spacing
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Paragraph Spacing")
+                        .font(.subheadline)
+                        .foregroundColor(.white.opacity(0.9))
+
+                    HStack(spacing: 8) {
+                        spacingButton(title: "Tight", value: 8.0, selection: $paragraphSpacing)
+                        spacingButton(title: "Normal", value: 16.0, selection: $paragraphSpacing)
+                        spacingButton(title: "Relaxed", value: 24.0, selection: $paragraphSpacing)
+                    }
+                }
+            }
+            .padding(.horizontal, 20)
+        }
+        .padding(.vertical, 16)
+    }
+
+    // MARK: - Section Divider
+    private var sectionDivider: some View {
+        Rectangle()
+            .fill(Color.white.opacity(0.1))
+            .frame(height: 1)
+            .padding(.horizontal, 20)
     }
     
     private func spacingButton(title: String, value: CGFloat, selection: Binding<CGFloat>) -> some View {
@@ -364,17 +678,14 @@ struct ArticleReaderView: View {
     }
 }
 
-// MARK: - RICH TEXT READER VIEW
+// MARK: - UNIFIED READER TEXT VIEW (Cleaned & Snapping)
 
-/// UIViewRepresentable that renders rich text with formatting spans
-/// Preserves TTS sync by using plain text indices
-struct RichTextReaderView: UIViewRepresentable {
+struct UnifiedReaderTextView: UIViewRepresentable {
     let articleTitle: String
     let author: String?
     let source: String
     let chapterTitle: String?
     let content: String
-    let formattingSpans: [FormattingSpan]?
     let highlightRange: NSRange
     let isPlaying: Bool
     
@@ -382,72 +693,34 @@ struct RichTextReaderView: UIViewRepresentable {
     let paragraphSpacing: CGFloat
     
     let onTapWord: (Int) -> Void
-    let onTapLink: (URL) -> Void
     
     private let contentOffset: Int
     private let fullAttributedText: NSAttributedString
-    private let linkRanges: [(NSRange, URL)]  // Store link locations for tap detection
-    
-    // Purple color matching app theme
-    private static let purpleColor = UIColor(red: 0.4, green: 0.2, blue: 0.8, alpha: 1.0)
     
     init(articleTitle: String,
          author: String?,
          source: String,
          chapterTitle: String?,
          content: String,
-         formattingSpans: [FormattingSpan]?,
          highlightRange: NSRange,
          isPlaying: Bool,
          lineSpacing: CGFloat,
          paragraphSpacing: CGFloat,
-         onTapWord: @escaping (Int) -> Void,
-         onTapLink: @escaping (URL) -> Void) {
+         onTapWord: @escaping (Int) -> Void) {
         
         self.articleTitle = articleTitle
         self.author = author
         self.source = source
         self.chapterTitle = chapterTitle
         self.content = content
-        self.formattingSpans = formattingSpans
         self.highlightRange = highlightRange
         self.isPlaying = isPlaying
         self.lineSpacing = lineSpacing
         self.paragraphSpacing = paragraphSpacing
         self.onTapWord = onTapWord
-        self.onTapLink = onTapLink
         
-        // Build the attributed string
-        let (attributedString, offset, links) = Self.buildAttributedString(
-            articleTitle: articleTitle,
-            author: author,
-            source: source,
-            chapterTitle: chapterTitle,
-            content: content,
-            formattingSpans: formattingSpans,
-            lineSpacing: lineSpacing,
-            paragraphSpacing: paragraphSpacing
-        )
-        
-        self.fullAttributedText = attributedString
-        self.contentOffset = offset
-        self.linkRanges = links
-    }
-    
-    /// Builds the complete attributed string with header and formatted body
-    private static func buildAttributedString(
-        articleTitle: String,
-        author: String?,
-        source: String,
-        chapterTitle: String?,
-        content: String,
-        formattingSpans: [FormattingSpan]?,
-        lineSpacing: CGFloat,
-        paragraphSpacing: CGFloat
-    ) -> (NSAttributedString, Int, [(NSRange, URL)]) {
-        
+        // Construct Full Text
         let combined = NSMutableAttributedString()
-        var linkRanges: [(NSRange, URL)] = []
         
         // -- HEADER --
         let headerStyle = NSMutableParagraphStyle()
@@ -456,14 +729,14 @@ struct RichTextReaderView: UIViewRepresentable {
         
         let titleAttrs: [NSAttributedString.Key: Any] = [
             .font: UIFont.systemFont(ofSize: 28, weight: .bold),
-            .foregroundColor: UIColor.white,
+            .foregroundColor: UIColor.label,
             .paragraphStyle: headerStyle
         ]
         combined.append(NSAttributedString(string: articleTitle + "\n", attributes: titleAttrs))
         
         let metaAttrs: [NSAttributedString.Key: Any] = [
             .font: UIFont.preferredFont(forTextStyle: .subheadline),
-            .foregroundColor: UIColor.white.withAlphaComponent(0.6),
+            .foregroundColor: UIColor.secondaryLabel,
             .paragraphStyle: headerStyle
         ]
         
@@ -474,13 +747,13 @@ struct RichTextReaderView: UIViewRepresentable {
         if let chTitle = chapterTitle {
             let chAttrs: [NSAttributedString.Key: Any] = [
                 .font: UIFont.systemFont(ofSize: 20, weight: .semibold),
-                .foregroundColor: purpleColor,
+                .foregroundColor: UIColor.systemPurple,
                 .paragraphStyle: headerStyle
             ]
             combined.append(NSAttributedString(string: chTitle + "\n\n", attributes: chAttrs))
         }
         
-        let contentOffset = combined.length
+        self.contentOffset = combined.length
         
         // -- BODY --
         let bodyStyle = NSMutableParagraphStyle()
@@ -489,128 +762,13 @@ struct RichTextReaderView: UIViewRepresentable {
         
         let bodyAttrs: [NSAttributedString.Key: Any] = [
             .font: UIFont.systemFont(ofSize: 18, weight: .regular),
-            .foregroundColor: UIColor.white,
+            .foregroundColor: UIColor.label,
             .paragraphStyle: bodyStyle
         ]
         
-        // Start with plain body text
-        let bodyText = NSMutableAttributedString(string: content, attributes: bodyAttrs)
-        
-        // Apply formatting spans
-        // CRITICAL: Convert Character indices to UTF-16 NSRange for NSAttributedString
-        // Swift String uses Character (grapheme cluster) counts, but NSAttributedString uses UTF-16
-        if let spans = formattingSpans {
-            for span in spans {
-                guard span.location >= 0 && span.location + span.length <= content.count else { continue }
-                
-                // Safely convert Character indices to String.Index, then to NSRange
-                let startIdx = content.index(content.startIndex, offsetBy: span.location)
-                let endIdx = content.index(startIdx, offsetBy: span.length)
-                let range = NSRange(startIdx..<endIdx, in: content)
-                
-                switch span.style {
-                case .bold:
-                    bodyText.addAttribute(.font, value: UIFont.systemFont(ofSize: 18, weight: .bold), range: range)
-                    
-                case .italic:
-                    bodyText.addAttribute(.font, value: UIFont.italicSystemFont(ofSize: 18), range: range)
-                    
-                case .boldItalic:
-                    if let descriptor = UIFont.systemFont(ofSize: 18, weight: .bold).fontDescriptor.withSymbolicTraits([.traitBold, .traitItalic]) {
-                        bodyText.addAttribute(.font, value: UIFont(descriptor: descriptor, size: 18), range: range)
-                    }
-                    
-                case .header1:
-                    let h1Style = NSMutableParagraphStyle()
-                    h1Style.lineSpacing = lineSpacing
-                    h1Style.paragraphSpacing = paragraphSpacing + 8
-                    h1Style.paragraphSpacingBefore = 16
-                    bodyText.addAttributes([
-                        .font: UIFont.systemFont(ofSize: 26, weight: .bold),
-                        .foregroundColor: UIColor.white,
-                        .paragraphStyle: h1Style
-                    ], range: range)
-                    
-                case .header2:
-                    let h2Style = NSMutableParagraphStyle()
-                    h2Style.lineSpacing = lineSpacing
-                    h2Style.paragraphSpacing = paragraphSpacing + 4
-                    h2Style.paragraphSpacingBefore = 12
-                    bodyText.addAttributes([
-                        .font: UIFont.systemFont(ofSize: 22, weight: .semibold),
-                        .foregroundColor: UIColor.white,
-                        .paragraphStyle: h2Style
-                    ], range: range)
-                    
-                case .header3:
-                    let h3Style = NSMutableParagraphStyle()
-                    h3Style.lineSpacing = lineSpacing
-                    h3Style.paragraphSpacing = paragraphSpacing + 2
-                    h3Style.paragraphSpacingBefore = 8
-                    bodyText.addAttributes([
-                        .font: UIFont.systemFont(ofSize: 19, weight: .semibold),
-                        .foregroundColor: UIColor.white.withAlphaComponent(0.9),
-                        .paragraphStyle: h3Style
-                    ], range: range)
-                    
-                case .blockquote:
-                    let quoteStyle = NSMutableParagraphStyle()
-                    quoteStyle.lineSpacing = lineSpacing
-                    quoteStyle.paragraphSpacing = paragraphSpacing
-                    quoteStyle.firstLineHeadIndent = 16
-                    quoteStyle.headIndent = 16
-                    quoteStyle.tailIndent = -8
-                    bodyText.addAttributes([
-                        .font: UIFont.italicSystemFont(ofSize: 17),
-                        .foregroundColor: UIColor.white.withAlphaComponent(0.8),
-                        .backgroundColor: UIColor.white.withAlphaComponent(0.05),
-                        .paragraphStyle: quoteStyle
-                    ], range: range)
-                    
-                case .listItem:
-                    let listStyle = NSMutableParagraphStyle()
-                    listStyle.lineSpacing = lineSpacing
-                    listStyle.paragraphSpacing = paragraphSpacing / 2
-                    listStyle.firstLineHeadIndent = 0
-                    listStyle.headIndent = 20
-                    bodyText.addAttribute(.paragraphStyle, value: listStyle, range: range)
-                    
-                case .link:
-                    bodyText.addAttributes([
-                        .foregroundColor: purpleColor,
-                        .underlineStyle: NSUnderlineStyle.single.rawValue,
-                        .underlineColor: purpleColor.withAlphaComponent(0.5)
-                    ], range: range)
-                    
-                    // Store link range for tap detection
-                    if let urlString = span.url, let url = URL(string: urlString) {
-                        let adjustedRange = NSRange(location: range.location + contentOffset, length: range.length)
-                        linkRanges.append((adjustedRange, url))
-                    }
-                    
-                case .code:
-                    bodyText.addAttributes([
-                        .font: UIFont.monospacedSystemFont(ofSize: 16, weight: .regular),
-                        .foregroundColor: UIColor(red: 0.9, green: 0.7, blue: 1.0, alpha: 1.0),
-                        .backgroundColor: UIColor.white.withAlphaComponent(0.1)
-                    ], range: range)
-                    
-                case .preformatted:
-                    let preStyle = NSMutableParagraphStyle()
-                    preStyle.lineSpacing = 4
-                    preStyle.paragraphSpacing = paragraphSpacing
-                    bodyText.addAttributes([
-                        .font: UIFont.monospacedSystemFont(ofSize: 14, weight: .regular),
-                        .foregroundColor: UIColor(red: 0.85, green: 0.85, blue: 0.9, alpha: 1.0),
-                        .backgroundColor: UIColor.black.withAlphaComponent(0.3),
-                        .paragraphStyle: preStyle
-                    ], range: range)
-                }
-            }
-        }
-        
-        combined.append(bodyText)
-        return (combined, contentOffset, linkRanges)
+        // Content is already cleaned by parent view
+        combined.append(NSAttributedString(string: content, attributes: bodyAttrs))
+        self.fullAttributedText = combined
     }
 
     func makeUIView(context: Context) -> UITextView {
@@ -621,9 +779,6 @@ struct RichTextReaderView: UIViewRepresentable {
         textView.backgroundColor = .clear
         textView.textContainerInset = UIEdgeInsets(top: 20, left: 16, bottom: UIScreen.main.bounds.height / 2, right: 16)
         
-        // Disable default link interaction (we handle it ourselves)
-        textView.isSelectable = false
-        
         let tapGesture = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleTap(_:)))
         textView.addGestureRecognizer(tapGesture)
         
@@ -631,20 +786,13 @@ struct RichTextReaderView: UIViewRepresentable {
     }
 
     func updateUIView(_ textView: UITextView, context: Context) {
-        // Update coordinator with current values
-        context.coordinator.onTapWord = onTapWord
-        context.coordinator.onTapLink = onTapLink
-        context.coordinator.contentOffset = contentOffset
-        context.coordinator.linkRanges = linkRanges
-        
-        // Update text if changed (but not during playback to avoid flicker)
-        if !isPlaying {
-            if textView.attributedText.string != fullAttributedText.string {
-                textView.attributedText = fullAttributedText
-            }
+        if textView.attributedText.string != fullAttributedText.string ||
+           !textView.attributedText.isEqual(to: fullAttributedText) {
+             if !isPlaying {
+                 textView.attributedText = fullAttributedText
+             }
         }
         
-        // Apply highlighting during playback
         if isPlaying && highlightRange.location != NSNotFound {
             let mutableText = NSMutableAttributedString(attributedString: fullAttributedText)
             
@@ -652,18 +800,18 @@ struct RichTextReaderView: UIViewRepresentable {
             let viewLength = highlightRange.length
             
             if viewLocation + viewLength <= mutableText.length {
-                // Snap to word boundaries for cleaner highlighting
+                // FIXED: Snap to Word Boundaries
+                // If TTS returns "art" of "smart", we expand to "smart"
                 let rawRange = NSRange(location: viewLocation, length: viewLength)
                 let snappedRange = snapToWordBoundary(text: mutableText.string, range: rawRange)
                 
                 let highlightAttrs: [NSAttributedString.Key: Any] = [
                     .foregroundColor: UIColor.white,
-                    .backgroundColor: Self.purpleColor
+                    .backgroundColor: UIColor(red: 0.4, green: 0.2, blue: 0.6, alpha: 1.0)
                 ]
                 mutableText.addAttributes(highlightAttrs, range: snappedRange)
                 textView.attributedText = mutableText
                 
-                // Auto-scroll to keep highlighted word visible
                 DispatchQueue.main.async {
                     let layoutManager = textView.layoutManager
                     let textContainer = textView.textContainer
@@ -685,9 +833,12 @@ struct RichTextReaderView: UIViewRepresentable {
                 }
             }
         }
+        
+        context.coordinator.onTap = onTapWord
+        context.coordinator.contentOffset = contentOffset
     }
     
-    /// Ensures full words are highlighted even if TTS range is partial
+    // NEW HELPER: Ensures full words are highlighted even if TTS range is partial
     func snapToWordBoundary(text: String, range: NSRange) -> NSRange {
         let nsString = text as NSString
         guard range.location < nsString.length else { return range }
@@ -717,20 +868,16 @@ struct RichTextReaderView: UIViewRepresentable {
     }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(contentOffset: contentOffset, linkRanges: linkRanges, onTapWord: onTapWord, onTapLink: onTapLink)
+        Coordinator(contentOffset: contentOffset, onTap: onTapWord)
     }
 
     class Coordinator: NSObject {
         var contentOffset: Int
-        var linkRanges: [(NSRange, URL)]
-        var onTapWord: (Int) -> Void
-        var onTapLink: (URL) -> Void
+        var onTap: (Int) -> Void
 
-        init(contentOffset: Int, linkRanges: [(NSRange, URL)], onTapWord: @escaping (Int) -> Void, onTapLink: @escaping (URL) -> Void) {
+        init(contentOffset: Int, onTap: @escaping (Int) -> Void) {
             self.contentOffset = contentOffset
-            self.linkRanges = linkRanges
-            self.onTapWord = onTapWord
-            self.onTapLink = onTapLink
+            self.onTap = onTap
         }
 
         @objc func handleTap(_ gesture: UITapGestureRecognizer) {
@@ -745,15 +892,6 @@ struct RichTextReaderView: UIViewRepresentable {
             let textContainer = textView.textContainer
             let characterIndex = layoutManager.characterIndex(for: point, in: textContainer, fractionOfDistanceBetweenInsertionPoints: nil)
             
-            // Check if tap is on a link first
-            for (range, url) in linkRanges {
-                if NSLocationInRange(characterIndex, range) {
-                    onTapLink(url)
-                    return
-                }
-            }
-            
-            // Otherwise, handle as word tap for TTS seeking
             let bodyIndex = characterIndex - contentOffset
             if bodyIndex >= 0 {
                 let text = textView.text ?? ""
@@ -767,14 +905,9 @@ struct RichTextReaderView: UIViewRepresentable {
                         }
                         wordStart -= 1
                     }
-                    onTapWord(wordStart - contentOffset)
+                    onTap(wordStart - contentOffset)
                 }
             }
         }
     }
 }
-
-// MARK: - Legacy Support (Backward Compatibility)
-
-/// Alias for old code that might reference UnifiedReaderTextView
-typealias UnifiedReaderTextView = RichTextReaderView

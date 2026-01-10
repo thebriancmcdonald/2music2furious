@@ -1,5 +1,7 @@
 # 2 Music 2 Furious: Technical Specification
 
+**For Claude, by Claude** - to prevent regressions or errors when creating or editing features. When writing this be clear but concise with only needed information in here, no fluff.
+
 ---
 
 # STOP - READ BEFORE WRITING ANY CODE
@@ -605,6 +607,70 @@ After ANY change, verify:
 
 ---
 
+## SHARE EXTENSION (SaveToReader)
+
+Location: `SaveToReader/ShareViewController.swift`
+
+Modern iOS share extension for saving web articles to the app. Uses native sheet presentation with custom UI.
+
+### Key Features
+- **Standard iOS sheet** - Uses system presentation with grab bar
+- **Drawing checkmark animation** - Purple checkmark animates on success
+- **Read/Listen actions** - Deep links into main app
+- **Error handling with retry** - Graceful failure with retry button
+- **Haptic feedback** - Success and error haptics
+- **Auto-dismiss** - 4s for success, 6s for errors (cancellable by user interaction)
+
+### UI Hierarchy (Success State)
+```
+[Standard iOS Grab Bar - 36pt × 4pt, 6pt from top]
+
+    [100×100 App Logo - rounded corners]
+    [24×24 Checkmark] "Saved"  ← horizontal row
+    "Article Title"
+
+    [Read Button] [Listen Button]
+```
+
+### Visual Design Standards
+- **Grab bar**: 36pt wide, 4pt tall, systemGray4, 2pt corner radius, 6pt from top
+- **Logo**: 100×100pt, 22pt corner radius, fades in first
+- **Checkmark**: 24×24pt, 2.5pt stroke, draws after logo (circle then check)
+- **Spacing**: 24pt between main elements, 16pt spacer before buttons
+- **Colors**: Brand purple (#AF52DE area), systemGray4 for grab bar
+- **Buttons**: 54pt tall, purple primary (Listen), gray secondary (Read)
+
+### Animation Timeline
+1. **0.0s** - Logo fades in (0.3s duration)
+2. **0.3s** - Checkmark circle draws (0.3s duration)
+3. **0.55s** - Checkmark draws (0.25s duration)
+4. **0.3s** - "Saved" row fades in (0.3s duration)
+5. **0.5s** - Article title fades in (0.4s duration)
+6. **0.7s** - Buttons scale in with spring (0.5s duration)
+
+### Deep Linking
+URL scheme: `2music2furious://article?action=[read|listen]&id=[UUID]`
+- **read** - Opens article in reader view
+- **listen** - Opens article and starts TTS playback
+
+### DO NOT:
+- Remove or modify the grab bar dimensions (standard iOS)
+- Change animation timing without testing full sequence
+- Remove haptic feedback
+- Skip the drawing animation for checkmark
+- Change the hierarchy order (logo → checkmark+saved → title → buttons)
+- Modify auto-dismiss timers without user discussion
+
+### Error State
+Same sheet layout but:
+- Red error icon (70×70pt) instead of logo+checkmark
+- Red "Couldn't Save Article" title
+- Gray error message (descriptive)
+- Retry (purple) and Cancel (gray) buttons
+- 6s auto-dismiss (longer than success)
+
+---
+
 ## FILE LOCATIONS
 
 | File | Contains |
@@ -628,3 +694,4 @@ After ANY change, verify:
 | SharedComponents.swift | Reusable UI (Glass* views) |
 | Track.swift | Track model with chapter support |
 | Readability.js | Mozilla article extraction (bundle resource) |
+| **SaveToReader/ShareViewController.swift** | **Share Extension - article saving UI** |

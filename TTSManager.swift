@@ -9,6 +9,7 @@
 import Foundation
 import AVFoundation
 import Combine
+import UIKit
 
 class TTSManager: NSObject, ObservableObject {
     static let shared = TTSManager()
@@ -31,7 +32,20 @@ class TTSManager: NSObject, ObservableObject {
     }
 
     // Voice settings
-    @Published var selectedVoiceIdentifier: String? = nil
+    @Published var selectedVoiceIdentifier: String? = nil {
+        didSet {
+            // Provide haptic feedback for voice change
+            let haptic = UIImpactFeedbackGenerator(style: .light)
+            haptic.impactOccurred()
+
+            // If currently playing, restart from current position with new voice
+            if isPlaying || isPaused {
+                let currentPos = currentCharacterPosition
+                stop()
+                speak(from: currentPos)
+            }
+        }
+    }
 
     // MARK: - Current State
 
@@ -61,15 +75,101 @@ class TTSManager: NSObject, ObservableObject {
     // MARK: - Available Voices
 
     static var availableVoices: [AVSpeechSynthesisVoice] {
-        AVSpeechSynthesisVoice.speechVoices()
+        let voices = AVSpeechSynthesisVoice.speechVoices()
             .filter { $0.language.starts(with: "en") }
-            .sorted { $0.quality.rawValue > $1.quality.rawValue }
+            .sorted { voice1, voice2 in
+                if voice1.quality.rawValue != voice2.quality.rawValue {
+                    return voice1.quality.rawValue > voice2.quality.rawValue
+                }
+                return voice1.name < voice2.name
+            }
+
+        // Debug: Print all available voices to console
+        #if DEBUG
+        for voice in voices {
+            print("Voice: \(voice.name) | ID: \(voice.identifier) | Quality: \(voice.quality.rawValue) | Lang: \(voice.language)")
+        }
+        #endif
+
+        return voices
+    }
+
+    // Note: Siri voices are NOT available via AVSpeechSynthesizer API (Apple restriction for privacy)
+    // Even if downloaded in Settings, they won't appear in speechVoices()
+
+    static var premiumVoices: [AVSpeechSynthesisVoice] {
+        availableVoices.filter { $0.quality == .premium }
+    }
+
+    static var enhancedVoices: [AVSpeechSynthesisVoice] {
+        availableVoices.filter { $0.quality == .enhanced }
+    }
+
+    static var standardVoices: [AVSpeechSynthesisVoice] {
+        availableVoices.filter { $0.quality == .default }
+    }
+
+    /// Known premium voice identifiers that may not be downloaded
+    static var knownPremiumVoiceIdentifiers: [(identifier: String, name: String, language: String)] {
+        // These are common premium voices on iOS - user may need to download them
+        [
+            ("com.apple.voice.premium.en-US.Zoe", "Zoe", "en-US"),
+            ("com.apple.voice.premium.en-US.Evan", "Evan", "en-US"),
+            ("com.apple.voice.premium.en-GB.Stephanie", "Stephanie", "en-GB"),
+            ("com.apple.voice.premium.en-GB.Tom", "Tom", "en-GB"),
+            ("com.apple.voice.premium.en-AU.Lee", "Lee", "en-AU"),
+            ("com.apple.voice.premium.en-AU.Karen", "Karen", "en-AU"),
+        ]
+    }
+
+    /// Check if a premium voice is downloaded
+    static func isPremiumVoiceDownloaded(_ identifier: String) -> Bool {
+        return AVSpeechSynthesisVoice(identifier: identifier) != nil
+    }
+
+    /// Get voice metadata (region and likely gender)
+    static func voiceMetadata(for voice: AVSpeechSynthesisVoice) -> (region: String, gender: String) {
+        let region: String
+        let languageComponents = voice.language.components(separatedBy: "-")
+        if languageComponents.count > 1 {
+            let regionCode = languageComponents.last ?? "US"
+            switch regionCode {
+            case "US": region = "US"
+            case "GB": region = "UK"
+            case "AU": region = "AU"
+            case "IE": region = "Ireland"
+            case "ZA": region = "South Africa"
+            case "IN": region = "India"
+            case "NZ": region = "New Zealand"
+            case "SG": region = "Singapore"
+            default: region = regionCode
+            }
+        } else {
+            region = "US"
+        }
+
+        // Gender detection based on common voice names
+        let femaleLikelyNames = ["samantha", "karen", "moira", "tessa", "kate", "serena", "victoria",
+                                  "fiona", "nicky", "allison", "ava", "susan", "zoe", "stephanie",
+                                  "lee", "catherine", "emily", "siri"]
+        let maleLikelyNames = ["daniel", "oliver", "alex", "fred", "thomas", "arthur", "gordon",
+                               "aaron", "evan", "tom", "james", "ralph", "rishi"]
+        let lowercasedName = voice.name.lowercased()
+
+        if femaleLikelyNames.contains(where: { lowercasedName.contains($0) }) {
+            return (region, "Female")
+        } else if maleLikelyNames.contains(where: { lowercasedName.contains($0) }) {
+            return (region, "Male")
+        } else {
+            return (region, "")
+        }
     }
 
     static var defaultVoice: AVSpeechSynthesisVoice? {
-        // Prefer enhanced/premium voices
+        // Prefer premium > enhanced > default
         let voices = availableVoices
-        return voices.first { $0.quality == .enhanced }
+        return voices.first { $0.quality == .premium }
+            ?? voices.first { $0.quality == .enhanced }
             ?? voices.first { $0.quality == .default }
             ?? voices.first
     }
@@ -211,6 +311,46 @@ class TTSManager: NSObject, ObservableObject {
             playbackSpeed = speeds[nextIndex]
         } else {
             playbackSpeed = 1.0
+        }
+    }
+
+    /// Preview a voice with a sample phrase
+    /// If currently playing article, switches voice and continues. Otherwise plays sample.
+    func previewVoice(identifier: String) {
+        if isPlaying || isPaused {
+            // Currently reading - just switch voice (didSet handles restart)
+            selectedVoiceIdentifier = identifier
+        } else {
+            // Not reading - play a preview sample
+            let previewText = "Hello, I'm your reading assistant."
+            let utterance = AVSpeechUtterance(string: previewText)
+
+            if let voice = AVSpeechSynthesisVoice(identifier: identifier) {
+                utterance.voice = voice
+            }
+
+            utterance.rate = mapSpeedToRate(playbackSpeed)
+            utterance.pitchMultiplier = 1.0
+            utterance.volume = 1.0
+
+            // Stop any existing speech and play preview
+            synthesizer.stopSpeaking(at: .immediate)
+            synthesizer.speak(utterance)
+
+            // Haptic feedback
+            let haptic = UIImpactFeedbackGenerator(style: .light)
+            haptic.impactOccurred()
+        }
+    }
+
+    /// Open iOS Settings app
+    /// Note: Deep linking to Accessibility requires special entitlements that third-party apps don't have
+    /// The alert message guides users to the correct location manually
+    static func openVoiceDownloadSettings() {
+        // UIApplication.openSettingsURLString opens our app's settings page
+        // For system settings, we need to guide the user manually via the alert
+        if let url = URL(string: UIApplication.openSettingsURLString) {
+            UIApplication.shared.open(url)
         }
     }
 

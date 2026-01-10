@@ -3,7 +3,8 @@
 //  2 Music 2 Furious
 //
 //  Main app view with dual audio players
-//  UPDATED: BookManager observes speech player for chapter tracking
+//  RESTORED: Original UI
+//  FIXED: Global Controls + Initialization arguments
 //
 
 import SwiftUI
@@ -35,28 +36,41 @@ struct ContentView: View {
     @State private var showingSpeechQueue = false
     @State private var showingArticleLibrary = false
     
+    // Feature Toggles
     @State private var backgroundModeEnabled = false
-    @State private var hasRestoredState = false
+    @State private var voiceBoostEnabled = false
     
+    // MARK: - App lifecycle
     @Environment(\.scenePhase) var scenePhase
     
     var body: some View {
         ZStack {
+            // Background
             backgroundGradient
             
-            VStack(spacing: 0) {
+            VStack(spacing: 12) {
+                // Header
                 header
-                Spacer().frame(height: 16)
-                musicPanel.frame(maxWidth: .infinity, maxHeight: .infinity)
-                Spacer().frame(height: 16)
-                speechPanel.frame(maxWidth: .infinity, maxHeight: .infinity)
-                Spacer().frame(height: 16)
+                    .padding(.top, 4)
+                
+                // Music Panel
+                musicPanel
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                
+                // Speech Panel
+                speechPanel
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                
+                // Bottom padding
+                Color.clear.frame(height: 2)
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 16)
+            .padding(.horizontal)
+            .padding(.bottom, 8)
         }
         .preferredColorScheme(.dark)
+        // MARK: - Sheets
         .sheet(isPresented: $showingMusicLibrary) {
+            // FIXED: Argument label
             MusicLibraryView(library: musicLibrary, musicPlayer: musicPlayer, dismiss: { showingMusicLibrary = false })
         }
         .sheet(isPresented: $showingBookLibrary) {
@@ -69,81 +83,82 @@ struct ContentView: View {
             RadioSearchView(radioAPI: radioAPI, musicPlayer: musicPlayer, dismiss: { showingRadioSearch = false })
         }
         .sheet(isPresented: $showingMusicQueue) {
+            // FIXED: Added title
             QueueView(player: musicPlayer, title: "Music Queue", dismiss: { showingMusicQueue = false })
         }
         .sheet(isPresented: $showingSpeechQueue) {
+            // FIXED: Added title
             QueueView(player: speechPlayer, title: "Speech Queue", dismiss: { showingSpeechQueue = false })
         }
         .sheet(isPresented: $showingArticleLibrary) {
             ArticleLibraryView(articleManager: articleManager, speechPlayer: speechPlayer, dismiss: { showingArticleLibrary = false })
         }
+        // MARK: - Lifecycle
         .onAppear {
             musicLibrary.checkAuthorization()
-            setupAudioSession()
-            
-            LockScreenManager.shared.musicPlayer = musicPlayer
-            LockScreenManager.shared.speechPlayer = speechPlayer
-            LockScreenManager.shared.setupRemoteCommands()
+            setupGlobalAudioSession()
+            setupGlobalRemoteCommands()
             
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                 warmUpManagers()
             }
-            
-            if !hasRestoredState {
-                hasRestoredState = true
-                musicPlayer.restoreState()
-                speechPlayer.restoreState()
-            }
         }
         .onChange(of: scenePhase) { newPhase in
             if newPhase == .background || newPhase == .inactive {
-                musicPlayer.saveFullState()
-                speechPlayer.saveFullState()
+                musicPlayer.saveCurrentPosition()
+                speechPlayer.saveCurrentPosition()
             }
             if newPhase == .active {
                 articleManager.checkForPendingArticles()
             }
         }
         .onChange(of: backgroundModeEnabled) { musicPlayer.isDucking = $0 }
+        .onChange(of: voiceBoostEnabled) { speechPlayer.isBoostEnabled = $0 }
     }
     
     // MARK: - Background
     
     private var backgroundGradient: some View {
-        LinearGradient(
-            colors: [Color(red: 0.05, green: 0.05, blue: 0.1), Color(red: 0.1, green: 0.1, blue: 0.2)],
-            startPoint: .topLeading, endPoint: .bottomTrailing
-        ).ignoresSafeArea()
+        GeometryReader { _ in
+            LinearGradient(
+                colors: [Color(red: 0.05, green: 0.05, blue: 0.1), Color(red: 0.1, green: 0.1, blue: 0.2)],
+                startPoint: .topLeading, endPoint: .bottomTrailing
+            )
+            .overlay(
+                ZStack {
+                    if let artwork = musicPlayer.artwork ?? speechPlayer.artwork {
+                        Image(uiImage: artwork)
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                            .ignoresSafeArea()
+                            .blur(radius: 60)
+                            .opacity(0.5)
+                    } else {
+                        ZStack {
+                            Circle().fill(Color.blue.opacity(0.15)).blur(radius: 80).offset(x: -100, y: -200)
+                            Circle().fill(Color.purple.opacity(0.15)).blur(radius: 80).offset(x: 100, y: 200)
+                        }
+                    }
+                }
+            )
+        }
+        .ignoresSafeArea()
     }
     
     // MARK: - Header
-
+    
     private var header: some View {
         HStack {
-            HStack(spacing: 10) {
-                AppIconView()
-                    .frame(width: 36, height: 36)
-                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-
-                VStack(alignment: .leading, spacing: 0) {
-                    Text("2 MUSIC")
-                        .font(.system(size: 14, weight: .heavy, design: .rounded))
-                        .foregroundColor(.white)
-                        .shadow(color: .cyan.opacity(0.5), radius: 10, x: 0, y: 0)
-                    Text("2 FURIOUS")
-                        .font(.system(size: 14, weight: .heavy, design: .rounded))
-                        .foregroundColor(.white)
-                        .shadow(color: .cyan.opacity(0.5), radius: 10, x: 0, y: 0)
-                }
-            }
-
+            Text("2 MUSIC 2 FURIOUS")
+                .font(.system(size: 20, weight: .heavy, design: .rounded))
+                .foregroundColor(.white)
+                .shadow(color: .cyan.opacity(0.5), radius: 10, x: 0, y: 0)
+            
             Spacer()
-
+            
             Button(action: {
-                let anyPlaying = musicPlayer.isPlaying || speechPlayer.isPlaying
-                if anyPlaying {
-                    musicPlayer.pause()
-                    speechPlayer.pause()
+                if musicPlayer.isPlaying || speechPlayer.isPlaying {
+                    musicPlayer.pause(); speechPlayer.pause()
                 } else {
                     if musicPlayer.currentTrack != nil { musicPlayer.play() }
                     if speechPlayer.currentTrack != nil { speechPlayer.play() }
@@ -161,6 +176,8 @@ struct ContentView: View {
                 .background(Capsule().fill(.ultraThinMaterial).overlay(Capsule().stroke(.white.opacity(0.3), lineWidth: 1)))
             }
         }
+        .padding(.horizontal)
+        .padding(.vertical, 8)
     }
     
     // MARK: - Music Panel
@@ -174,13 +191,21 @@ struct ContentView: View {
                         Text("MUSIC").font(.system(size: 10, weight: .bold, design: .rounded)).foregroundStyle(.white.opacity(0.8))
                     }
                     Spacer()
-                    MusicModeToggle(isDucking: $backgroundModeEnabled)
+                    Button(action: { backgroundModeEnabled.toggle() }) {
+                        HStack(spacing: 4) {
+                            Image(systemName: backgroundModeEnabled ? "speaker.zzz.fill" : "speaker.wave.3.fill")
+                            Text("QUIET").font(.system(size: 9, weight: .bold))
+                        }
+                        .padding(.horizontal, 8).padding(.vertical, 4)
+                        .background(backgroundModeEnabled ? Color.deepResumePurple : Color.black.opacity(0.3))
+                        .clipShape(Capsule())
+                        .overlay(Capsule().stroke(backgroundModeEnabled ? Color.royalPurple : Color.white.opacity(0.2), lineWidth: 1))
+                    }.foregroundColor(.white)
                 }
                 Spacer()
-                TrackInfoView(player: musicPlayer).zIndex(100)
+                TrackInfoView(player: musicPlayer)
                 Spacer()
                 SeekBarView(player: musicPlayer)
-                    .id("\(musicPlayer.currentIndex)-\(musicPlayer.currentTrack?.id.uuidString ?? "none")")
                 Spacer()
                 PlaybackControlsView(player: musicPlayer, skipBackSeconds: 15)
                 Spacer()
@@ -194,9 +219,7 @@ struct ContentView: View {
             }
             VerticalVolumeView(player: musicPlayer)
         }
-        .padding(16)
-        .background(panelBackground(for: musicPlayer))
-        .glassPanel()
+        .padding(16).background(panelBackground(for: musicPlayer)).glassPanel()
     }
     
     // MARK: - Speech Panel
@@ -210,13 +233,21 @@ struct ContentView: View {
                         Text("SPEECH").font(.system(size: 10, weight: .bold, design: .rounded)).foregroundStyle(.white.opacity(0.8))
                     }
                     Spacer()
-                    SpeechModeToggle(audioMode: $speechPlayer.audioMode)
+                    Button(action: { voiceBoostEnabled.toggle() }) {
+                        HStack(spacing: 4) {
+                            Image(systemName: voiceBoostEnabled ? "waveform.path.ecg" : "waveform")
+                            Text("BOOST").font(.system(size: 9, weight: .bold))
+                        }
+                        .padding(.horizontal, 8).padding(.vertical, 4)
+                        .background(voiceBoostEnabled ? Color.deepResumePurple : Color.black.opacity(0.3))
+                        .clipShape(Capsule())
+                        .overlay(Capsule().stroke(voiceBoostEnabled ? Color.royalPurple : Color.white.opacity(0.2), lineWidth: 1))
+                    }.foregroundColor(.white)
                 }
                 Spacer()
-                TrackInfoView(player: speechPlayer).zIndex(100)
+                TrackInfoView(player: speechPlayer)
                 Spacer()
                 SeekBarView(player: speechPlayer)
-                    .id("\(speechPlayer.currentIndex)-\(speechPlayer.currentTrack?.id.uuidString ?? "none")")
                 Spacer()
                 PlaybackControlsView(player: speechPlayer, skipBackSeconds: 15)
                 Spacer()
@@ -231,38 +262,50 @@ struct ContentView: View {
             }
             VerticalVolumeView(player: speechPlayer)
         }
-        .padding(16)
-        .background(panelBackground(for: speechPlayer))
-        .glassPanel()
+        .padding(16).background(panelBackground(for: speechPlayer)).glassPanel()
     }
     
     @ViewBuilder
     private func panelBackground(for player: AudioPlayer) -> some View {
         if let artwork = player.artwork {
             GeometryReader { geo in
-                Image(uiImage: artwork)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
+                Image(uiImage: artwork).resizable().aspectRatio(contentMode: .fill)
                     .frame(width: geo.size.width, height: geo.size.height)
-                    .blur(radius: 25)
-                    .overlay(Color.black.opacity(0.5))
-            }
-            .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+                    .blur(radius: 40).overlay(Color.black.opacity(0.5))
+            }.clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
         }
     }
     
-    private func setupAudioSession() {
+    private func setupGlobalAudioSession() {
         do {
             let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.playback, mode: .spokenAudio, options: [.allowBluetooth, .allowBluetoothA2DP])
-            try session.setActive(true, options: .notifyOthersOnDeactivation)
+            try session.setCategory(.playback, mode: .default)
+            try session.setActive(true)
         } catch { print("Failed to setup audio session: \(error)") }
-        
-        let manager = InterruptionManager.shared
-        manager.musicPlayer = musicPlayer
-        manager.speechPlayer = speechPlayer
-        
-        print("🎧 InterruptionManager initialized")
+    }
+    
+    private func setupGlobalRemoteCommands() {
+        let commandCenter = MPRemoteCommandCenter.shared()
+        commandCenter.playCommand.isEnabled = true
+        commandCenter.playCommand.addTarget { _ in
+            if musicPlayer.queue.count > 0 { musicPlayer.play() }
+            if speechPlayer.queue.count > 0 { speechPlayer.play() }
+            return .success
+        }
+        commandCenter.pauseCommand.isEnabled = true
+        commandCenter.pauseCommand.addTarget { _ in
+            musicPlayer.pause(); speechPlayer.pause()
+            return .success
+        }
+        commandCenter.togglePlayPauseCommand.isEnabled = true
+        commandCenter.togglePlayPauseCommand.addTarget { _ in
+            if musicPlayer.isPlaying || speechPlayer.isPlaying { musicPlayer.pause(); speechPlayer.pause() }
+            else {
+                if musicPlayer.queue.count > 0 { musicPlayer.play() }
+                if speechPlayer.queue.count > 0 { speechPlayer.play() }
+            }
+            return .success
+        }
     }
     
     private func warmUpManagers() {
@@ -271,11 +314,6 @@ struct ContentView: View {
         downloadManager.loadIfNeeded()
         radioAPI.loadIfNeeded()
         articleManager.loadIfNeeded()
-        
-        // Connect BookManager to observe speech player for chapter tracking
-        // This enables auto-mark-played and resume position tracking
-        bookManager.connectToSpeechPlayer(speechPlayer)
-        print("📖 BookManager connected to speech player")
     }
     
     private func glassButtonStyle(icon: String, text: String) -> some View {
@@ -293,130 +331,26 @@ struct ContentView: View {
 
 struct TrackInfoView: View {
     @ObservedObject var player: AudioPlayer
-    @State private var isSliderVisible = false
-    @State private var inactivityTimer: Timer?
-    
-    var isActive: Bool { player.playbackSpeed != 1.0 }
-    
     var body: some View {
         HStack(alignment: .center) {
             if let artwork = player.artwork {
-                Image(uiImage: artwork)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-                    .frame(width: 40, height: 40)
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
-                    .padding(.trailing, 4)
-                    .shadow(radius: 2)
+                Image(uiImage: artwork).resizable().aspectRatio(contentMode: .fill)
+                    .frame(width: 40, height: 40).clipShape(RoundedRectangle(cornerRadius: 6)).padding(.trailing, 4)
             }
-            
             VStack(alignment: .leading, spacing: 2) {
-                Text(player.currentTrack?.title ?? "Select Audio")
-                    .font(.system(size: 16, weight: .bold, design: .rounded))
-                    .foregroundColor(.white)
-                    .lineLimit(1)
-                Text(player.currentTrack?.artist ?? "No track loaded")
-                    .font(.system(size: 13, weight: .medium, design: .rounded))
-                    .foregroundColor(.white.opacity(0.7))
-                    .lineLimit(1)
+                Text(player.currentTrack?.title ?? "Select Audio").font(.system(size: 16, weight: .bold, design: .rounded)).foregroundColor(.white).lineLimit(1)
+                Text(player.currentTrack?.artist ?? "No track loaded").font(.system(size: 13, weight: .medium, design: .rounded)).foregroundColor(.white.opacity(0.7)).lineLimit(1)
             }
-            
             Spacer()
-            
-            Text(String(format: "%.1fx", player.playbackSpeed))
-                .font(.system(size: 12, weight: .bold, design: .monospaced))
-                .foregroundColor(.white)
-                .padding(.horizontal, 8).padding(.vertical, 4)
-                .background(Capsule().fill(isActive ? Color(red: 0.50, green: 0.42, blue: 0.60) : Color.white.opacity(0.25)))
-                .overlay(Capsule().stroke(isActive ? Color.royalPurple : Color.white.opacity(0.2), lineWidth: 1))
-                .contentShape(Rectangle())
-                .overlay(
-                    Group {
-                        if isSliderVisible {
-                            VerticalSpeedSlider(player: player, onInteraction: resetInactivityTimer)
-                                .offset(x: 0, y: 10)
-                                .transition(.scale(scale: 0.8, anchor: .top).combined(with: .opacity))
-                        }
-                    },
-                    alignment: .topTrailing
-                )
-                .zIndex(100)
-                .onTapGesture {
-                    if isSliderVisible { withAnimation { isSliderVisible = false } }
-                    else { player.cycleSpeed() }
-                }
-                .onLongPressGesture(minimumDuration: 0.3) {
-                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                    withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) { isSliderVisible = true }
-                    resetInactivityTimer()
-                }
+            Button(action: { player.cycleSpeed() }) {
+                Text("\(String(format: "%.1f", player.playbackSpeed))x")
+                    .font(.system(size: 12, weight: .bold, design: .monospaced))
+                    .foregroundColor(player.playbackSpeed == 1.0 ? .white.opacity(0.5) : .green)
+                    .padding(.horizontal, 8).padding(.vertical, 4)
+                    .background(Capsule().fill(player.playbackSpeed == 1.0 ? Color.white.opacity(0.1) : Color.white.opacity(0.2)))
+                    .overlay(Capsule().stroke(player.playbackSpeed == 1.0 ? Color.clear : Color.green.opacity(0.5), lineWidth: 1))
+            }
         }.padding(.horizontal, 4)
-    }
-    
-    private func resetInactivityTimer() {
-        inactivityTimer?.invalidate()
-        inactivityTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { _ in
-            withAnimation(.easeOut(duration: 0.2)) { isSliderVisible = false }
-        }
-    }
-}
-
-struct VerticalSpeedSlider: View {
-    @ObservedObject var player: AudioPlayer
-    var onInteraction: () -> Void
-    let minSpeed: Double = 0.5
-    let maxSpeed: Double = 3.0
-    
-    var body: some View {
-        VStack(spacing: 8) {
-            Text(String(format: "%.1fx", player.playbackSpeed))
-                .font(.system(size: 24, weight: .bold, design: .rounded))
-                .foregroundColor(.white)
-                .frame(maxWidth: .infinity)
-                .padding(.top, 4)
-            
-            GeometryReader { geo in
-                let height = geo.size.height
-                let progress = CGFloat((Double(player.playbackSpeed) - minSpeed) / (maxSpeed - minSpeed))
-                
-                ZStack(alignment: .bottom) {
-                    RoundedRectangle(cornerRadius: 12)
-                        .fill(Color.black.opacity(0.3))
-                        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.1), lineWidth: 1))
-                    RoundedRectangle(cornerRadius: 12)
-                        .fill(LinearGradient(colors: [Color.deepResumePurple, Color.royalPurple], startPoint: .bottom, endPoint: .top))
-                        .frame(height: max(0, min(height, height * progress)))
-                }
-                .contentShape(Rectangle())
-                .gesture(
-                    DragGesture(minimumDistance: 0)
-                        .onChanged { value in
-                            onInteraction()
-                            let dragPercent = 1.0 - (value.location.y / height)
-                            let newSpeed = minSpeed + (maxSpeed - minSpeed) * Double(dragPercent)
-                            if abs(newSpeed - 1.0) < 0.1 { player.playbackSpeed = 1.0 }
-                            else { player.playbackSpeed = Float(min(max(minSpeed, newSpeed), maxSpeed)) }
-                        }
-                        .onEnded { _ in onInteraction() }
-                )
-            }
-            .frame(height: 140)
-            
-            Button(action: { withAnimation { player.playbackSpeed = 1.0 }; onInteraction() }) {
-                Text("RESET")
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundColor(.white.opacity(0.8))
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 5)
-                    .background(Capsule().fill(Color.white.opacity(0.2)))
-            }
-        }
-        .padding(10)
-        .background(.ultraThinMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(Color.white.opacity(0.2), lineWidth: 1))
-        .shadow(color: .black.opacity(0.5), radius: 15, x: 0, y: 10)
-        .frame(width: 80)
     }
 }
 
@@ -516,7 +450,6 @@ struct SeekBarView: View {
     @State private var sliderValue: Double = 0
     @State private var displayTime: Double = 0
     @State private var isDragging: Bool = false
-    @State private var lastTrackId: UUID? = nil
     let timer = Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()
     
     var body: some View {
@@ -529,143 +462,16 @@ struct SeekBarView: View {
             Text("-" + formatTime(max(0, player.duration - displayTime))).font(.system(size: 10, weight: .bold, design: .monospaced)).foregroundStyle(.white.opacity(0.8)).frame(width: 45, alignment: .trailing)
         }
         .onReceive(timer) { _ in
-            // Check for track change on every tick (more reliable than .onChange)
-            if player.currentTrack?.id != lastTrackId {
-                lastTrackId = player.currentTrack?.id
-                sliderValue = 0
-                displayTime = 0
-                isDragging = false  // Cancel any drag in progress
-                return
-            }
-            
             guard !isDragging && player.isPlaying else { return }
             let newTime = player.currentTime
-            // Clamp to valid range and update
-            let clampedTime = min(max(0, newTime), player.duration > 0 ? player.duration : 0)
-            if abs(clampedTime - displayTime) > 0.3 {
-                displayTime = clampedTime
-                sliderValue = clampedTime
-            }
+            if abs(newTime - displayTime) > 0.4 { displayTime = newTime; sliderValue = newTime }
         }
-        .onAppear {
-            lastTrackId = player.currentTrack?.id
-            sliderValue = player.currentTime
-            displayTime = player.currentTime
-        }
-        .onChange(of: player.currentTrack?.id) { _ in
-            sliderValue = 0
-            displayTime = 0
-            isDragging = false
-            lastTrackId = player.currentTrack?.id
-        }
-        .onChange(of: player.currentIndex) { _ in
-            // Also reset on index change (backup for chapter changes)
-            sliderValue = 0
-            displayTime = 0
-            isDragging = false
-        }
+        .onAppear { sliderValue = player.currentTime; displayTime = player.currentTime }
+        .onChange(of: player.currentTrack?.id) { _ in sliderValue = 0; displayTime = 0 }
     }
     private func formatTime(_ time: Double) -> String {
         guard !time.isNaN && !time.isInfinite && time >= 0 else { return "00:00" }
         let totalSeconds = Int(time)
         return String(format: "%02d:%02d", totalSeconds / 60, totalSeconds % 60)
-    }
-}
-
-// MARK: - Mode Toggles
-
-struct MusicModeToggle: View {
-    @Binding var isDucking: Bool
-    
-    var body: some View {
-        HStack(spacing: 0) {
-            Button(action: { withAnimation(.easeInOut(duration: 0.2)) { isDucking = false } }) {
-                HStack(spacing: 3) {
-                    Image(systemName: "speaker.wave.2.fill").font(.system(size: 9))
-                    Text("Normal").font(.system(size: 9, weight: .semibold))
-                }
-                .foregroundColor(!isDucking ? .white : .white.opacity(0.5))
-                .padding(.horizontal, 8).padding(.vertical, 5)
-                .background(!isDucking ? Color.white.opacity(0.25) : Color.clear)
-            }
-            
-            Button(action: { withAnimation(.easeInOut(duration: 0.2)) { isDucking = true } }) {
-                HStack(spacing: 3) {
-                    Image(systemName: "speaker.wave.1.fill").font(.system(size: 9))
-                    Text("Quiet").font(.system(size: 9, weight: .semibold))
-                }
-                .foregroundColor(isDucking ? .white : .white.opacity(0.5))
-                .padding(.horizontal, 8).padding(.vertical, 5)
-                .background(isDucking ? Color(red: 0.50, green: 0.42, blue: 0.60) : Color.clear)
-            }
-        }
-        .background(Color.black.opacity(0.3))
-        .clipShape(Capsule())
-        .overlay(Capsule().stroke(isDucking ? Color.royalPurple : Color.white.opacity(0.2), lineWidth: 1))
-    }
-}
-
-struct SpeechModeToggle: View {
-    @Binding var audioMode: AudioPlayer.AudioMode
-    
-    var body: some View {
-        HStack(spacing: 0) {
-            Button(action: { withAnimation(.easeInOut(duration: 0.2)) { audioMode = .quality } }) {
-                HStack(spacing: 3) {
-                    Image(systemName: "waveform").font(.system(size: 9))
-                    Text("Quality").font(.system(size: 9, weight: .semibold))
-                }
-                .foregroundColor(audioMode == .quality ? .white : .white.opacity(0.5))
-                .padding(.horizontal, 8).padding(.vertical, 5)
-                .background(audioMode == .quality ? Color.white.opacity(0.25) : Color.clear)
-            }
-            
-            Button(action: { withAnimation(.easeInOut(duration: 0.2)) { audioMode = .boost } }) {
-                HStack(spacing: 3) {
-                    Image(systemName: "waveform.path.ecg").font(.system(size: 9))
-                    Text("Boost").font(.system(size: 9, weight: .semibold))
-                }
-                .foregroundColor(audioMode == .boost ? .white : .white.opacity(0.5))
-                .padding(.horizontal, 8).padding(.vertical, 5)
-                .background(audioMode == .boost ? Color(red: 0.50, green: 0.42, blue: 0.60) : Color.clear)
-            }
-        }
-        .background(Color.black.opacity(0.3))
-        .clipShape(Capsule())
-        .overlay(Capsule().stroke(audioMode == .boost ? Color.royalPurple : Color.white.opacity(0.2), lineWidth: 1))
-    }
-}
-
-// MARK: - App Icon View
-
-struct AppIconView: View {
-    var body: some View {
-        if let icon = loadAppIcon() {
-            Image(uiImage: icon)
-                .resizable()
-                .aspectRatio(contentMode: .fit)
-        } else {
-            // Fallback gradient with "2" if icon not found
-            ZStack {
-                LinearGradient(
-                    colors: [Color.purple, Color.pink],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
-                Text("2")
-                    .font(.system(size: 20, weight: .bold, design: .rounded))
-                    .foregroundColor(.white)
-            }
-        }
-    }
-
-    private func loadAppIcon() -> UIImage? {
-        guard let iconsDictionary = Bundle.main.infoDictionary?["CFBundleIcons"] as? [String: Any],
-              let primaryIconDictionary = iconsDictionary["CFBundlePrimaryIcon"] as? [String: Any],
-              let iconFiles = primaryIconDictionary["CFBundleIconFiles"] as? [String],
-              let lastIcon = iconFiles.last else {
-            return nil
-        }
-        return UIImage(named: lastIcon)
     }
 }
