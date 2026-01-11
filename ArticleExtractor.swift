@@ -13,6 +13,7 @@
 import Foundation
 import WebKit
 import SwiftSoup
+import UIKit
 
 // MARK: - Article Extractor
 
@@ -46,6 +47,7 @@ class ArticleExtractor: NSObject {
         let author: String?
         let content: String  // Clean HTML
         let excerpt: String?
+        let heroImageURL: String?  // og:image meta tag for header image
     }
     
     /// Result from full extraction pipeline
@@ -54,6 +56,7 @@ class ArticleExtractor: NSObject {
         let author: String?
         let plainText: String
         let formattingSpans: [FormattingSpan]
+        let images: [ArticleImage]
     }
     
     // MARK: - Main Extraction Method
@@ -63,20 +66,100 @@ class ArticleExtractor: NSObject {
     static func extract(from url: URL) async throws -> Article {
         // Step 1: Fetch and run Readability.js
         let readabilityResult = try await extractWithReadability(url: url)
-        
-        // Step 2: Parse clean HTML into text + spans with SwiftSoup
-        let parsed = try parseHTMLWithSwiftSoup(
+
+        // Step 2: Parse clean HTML into text + spans + images with SwiftSoup
+        var parsed = try parseHTMLWithSwiftSoup(
             html: readabilityResult.content,
             baseURL: url
         )
-        
-        // Step 3: Build Article
+
+        // Step 2.5: Prepend hero image from og:image if available
+        if let heroURL = readabilityResult.heroImageURL, !heroURL.isEmpty {
+            // Resolve relative URLs for hero image
+            var resolvedHeroURL = heroURL
+            if heroURL.hasPrefix("//") {
+                resolvedHeroURL = "\(url.scheme ?? "https"):\(heroURL)"
+            } else if heroURL.hasPrefix("/") {
+                resolvedHeroURL = "\(url.scheme ?? "https")://\(url.host ?? "")\(heroURL)"
+            }
+
+            // Check if this URL is already in the parsed images (avoid duplicates)
+            let isDuplicate = parsed.images.contains { image in
+                // Compare URLs ignoring query parameters and protocol
+                let heroNormalized = resolvedHeroURL
+                    .replacingOccurrences(of: "https://", with: "")
+                    .replacingOccurrences(of: "http://", with: "")
+                    .components(separatedBy: "?").first ?? ""
+                let imgNormalized = image.originalURL
+                    .replacingOccurrences(of: "https://", with: "")
+                    .replacingOccurrences(of: "http://", with: "")
+                    .components(separatedBy: "?").first ?? ""
+                return heroNormalized == imgNormalized
+            }
+
+            if !isDuplicate {
+                print("🖼️ [HERO] Adding hero image from og:image: \(resolvedHeroURL)")
+
+                // Create hero image at position 0
+                let heroImage = ArticleImage(
+                    location: 0,
+                    localPath: nil,
+                    originalURL: resolvedHeroURL,
+                    caption: nil,
+                    altText: "Hero image"
+                )
+
+                // Prepend placeholder to content and shift all other positions
+                let heroPlaceholder = "\u{FFFC}\n\n"
+                let shiftAmount = heroPlaceholder.count
+
+                // Shift all existing image positions
+                var shiftedImages = parsed.images.map { image in
+                    ArticleImage(
+                        id: image.id,
+                        location: image.location + shiftAmount,
+                        localPath: image.localPath,
+                        originalURL: image.originalURL,
+                        caption: image.caption,
+                        altText: image.altText
+                    )
+                }
+
+                // Shift all formatting spans
+                let shiftedSpans = parsed.spans.map { span in
+                    FormattingSpan(
+                        location: span.location + shiftAmount,
+                        length: span.length,
+                        style: span.style,
+                        url: span.url
+                    )
+                }
+
+                // Insert hero image at the beginning
+                shiftedImages.insert(heroImage, at: 0)
+
+                // Update parsed result with shifted content
+                parsed = ParsedHTML(
+                    plainText: heroPlaceholder + parsed.plainText,
+                    spans: shiftedSpans,
+                    images: shiftedImages
+                )
+            } else {
+                print("🖼️ [HERO] Skipping og:image - already in article content")
+            }
+        }
+
+        // Step 3: Download images asynchronously
+        let downloadedImages = await downloadImages(parsed.images)
+
+        // Step 4: Build Article
         let chapter = ArticleChapter(
             title: readabilityResult.title,
             content: parsed.plainText,
-            formattingSpans: parsed.spans
+            formattingSpans: parsed.spans,
+            images: downloadedImages.isEmpty ? nil : downloadedImages
         )
-        
+
         return Article(
             title: readabilityResult.title,
             source: url.host?.replacingOccurrences(of: "www.", with: "") ?? "Web",
@@ -84,6 +167,119 @@ class ArticleExtractor: NSObject {
             author: readabilityResult.author,
             chapters: [chapter]
         )
+    }
+
+    // MARK: - Image Downloading
+
+    /// Downloads images and saves them locally, returning updated ArticleImage objects
+    private static func downloadImages(_ images: [ArticleImage]) async -> [ArticleImage] {
+        guard !images.isEmpty else { return [] }
+
+        return await withTaskGroup(of: ArticleImage?.self) { group in
+            for image in images {
+                group.addTask {
+                    await downloadImage(image)
+                }
+            }
+
+            var results: [ArticleImage] = []
+            for await result in group {
+                if let image = result {
+                    results.append(image)
+                }
+            }
+            // Sort by location to maintain order
+            return results.sorted { $0.location < $1.location }
+        }
+    }
+
+    /// Downloads a single image and saves it to the app's documents directory
+    private static func downloadImage(_ image: ArticleImage) async -> ArticleImage? {
+        guard let url = URL(string: image.originalURL) else {
+            print("🖼️ [IMAGE] Invalid URL: \(image.originalURL)")
+            return nil
+        }
+
+        print("🖼️ [IMAGE] Downloading: \(url.absoluteString)")
+
+        do {
+            let (data, response) = try await URLSession.shared.data(from: url)
+
+            // Verify it's an image
+            guard let httpResponse = response as? HTTPURLResponse else {
+                print("🖼️ [IMAGE] Not HTTP response")
+                return nil
+            }
+
+            print("🖼️ [IMAGE] Status: \(httpResponse.statusCode), MIME: \(httpResponse.mimeType ?? "unknown"), Size: \(data.count) bytes")
+
+            guard httpResponse.statusCode == 200,
+                  let mimeType = httpResponse.mimeType,
+                  mimeType.hasPrefix("image/") else {
+                print("🖼️ [IMAGE] Rejected - not a valid image response")
+                return nil
+            }
+
+            // Determine file extension from mime type
+            let ext: String
+            switch mimeType {
+            case "image/jpeg": ext = "jpg"
+            case "image/png": ext = "png"
+            case "image/gif": ext = "gif"
+            case "image/webp": ext = "webp"
+            case "image/avif": ext = "avif"
+            default: ext = "jpg"
+            }
+
+            // Save to documents/images directory
+            let filename = "\(image.id.uuidString).\(ext)"
+            let imagesDir = getImagesDirectory()
+            let filePath = imagesDir.appendingPathComponent(filename)
+
+            try data.write(to: filePath)
+            print("🖼️ [IMAGE] Saved to: \(filePath.path)")
+
+            // Verify the image can be loaded
+            if let testLoad = UIImage(contentsOfFile: filePath.path) {
+                print("🖼️ [IMAGE] ✅ Verified loadable: \(testLoad.size)")
+            } else {
+                print("🖼️ [IMAGE] ⚠️ Saved but UIImage cannot load it (format issue?)")
+            }
+
+            // Return updated image with local path
+            return ArticleImage(
+                id: image.id,
+                location: image.location,
+                localPath: filename,
+                originalURL: image.originalURL,
+                caption: image.caption,
+                altText: image.altText
+            )
+        } catch {
+            print("🖼️ [IMAGE] ❌ Download failed: \(error)")
+            // Return original without local path - can be loaded from URL later
+            return image
+        }
+    }
+
+    /// Gets the app's images directory, creating it if needed
+    static func getImagesDirectory() -> URL {
+        let documentsDir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let imagesDir = documentsDir.appendingPathComponent("ArticleImages", isDirectory: true)
+
+        if !FileManager.default.fileExists(atPath: imagesDir.path) {
+            try? FileManager.default.createDirectory(at: imagesDir, withIntermediateDirectories: true)
+        }
+
+        return imagesDir
+    }
+
+    /// Loads an image from local storage or returns nil
+    static func loadImage(for articleImage: ArticleImage) -> UIImage? {
+        guard let localPath = articleImage.localPath else { return nil }
+        let imagesDir = getImagesDirectory()
+        let filePath = imagesDir.appendingPathComponent(localPath)
+        return UIImage(contentsOfFile: filePath.path)
     }
     
     // MARK: - Readability.js Extraction
@@ -105,6 +301,7 @@ class ArticleExtractor: NSObject {
     struct ParsedHTML {
         let plainText: String
         let spans: [FormattingSpan]
+        let images: [ArticleImage]
     }
 
     /// Parses clean HTML from Readability into plain text + formatting spans
@@ -115,11 +312,12 @@ class ArticleExtractor: NSObject {
 
         var plainText = ""
         var spans: [FormattingSpan] = []
+        var images: [ArticleImage] = []
 
         // Process the body (or root element)
         if let body = doc.body() {
             var needsSpaceBefore = false
-            try processNode(body, plainText: &plainText, spans: &spans, baseURL: baseURL, activeStyles: [], needsSpaceBefore: &needsSpaceBefore)
+            try processNode(body, plainText: &plainText, spans: &spans, images: &images, baseURL: baseURL, activeStyles: [], needsSpaceBefore: &needsSpaceBefore)
         }
 
         // Clean up trailing whitespace
@@ -133,7 +331,7 @@ class ArticleExtractor: NSObject {
         // Final pass: decode any remaining HTML entities in the plain text
         plainText = decodeHTMLEntities(plainText)
 
-        return ParsedHTML(plainText: plainText, spans: spans)
+        return ParsedHTML(plainText: plainText, spans: spans, images: images)
     }
 
     /// Decodes HTML entities like &#x27; &amp; &quot; etc. to their actual characters
@@ -214,6 +412,7 @@ class ArticleExtractor: NSObject {
         _ node: Node,
         plainText: inout String,
         spans: inout [FormattingSpan],
+        images: inout [ArticleImage],
         baseURL: URL?,
         activeStyles: [(style: FormattingStyle, start: Int, url: String?)],
         needsSpaceBefore: inout Bool
@@ -259,15 +458,27 @@ class ArticleExtractor: NSObject {
             }
             return
         }
-        
+
         // Handle element nodes
         guard let element = node as? Element else { return }
-        
+
         let tagName = element.tagName().lowercased()
-        
-        // Skip these elements entirely
-        let skipTags = ["script", "style", "nav", "footer", "header", "aside", "form", "iframe", "noscript", "svg", "figure", "figcaption", "button", "input", "select", "textarea"]
+
+        // Skip these elements entirely (removed figure/figcaption - we handle those now)
+        let skipTags = ["script", "style", "nav", "footer", "header", "aside", "form", "iframe", "noscript", "svg", "button", "input", "select", "textarea"]
         if skipTags.contains(tagName) {
+            return
+        }
+
+        // Handle <figure> elements specially - extract image and caption together
+        if tagName == "figure" {
+            try processFigure(element, plainText: &plainText, spans: &spans, images: &images, baseURL: baseURL, needsSpaceBefore: &needsSpaceBefore)
+            return
+        }
+
+        // Handle standalone <img> tags (not in a figure)
+        if tagName == "img" {
+            processImage(element, plainText: &plainText, images: &images, baseURL: baseURL, caption: nil, needsSpaceBefore: &needsSpaceBefore)
             return
         }
         
@@ -342,7 +553,7 @@ class ArticleExtractor: NSObject {
         
         // Process children
         for child in node.getChildNodes() {
-            try processNode(child, plainText: &plainText, spans: &spans, baseURL: baseURL, activeStyles: newActiveStyles, needsSpaceBefore: &needsSpaceBefore)
+            try processNode(child, plainText: &plainText, spans: &spans, images: &images, baseURL: baseURL, activeStyles: newActiveStyles, needsSpaceBefore: &needsSpaceBefore)
         }
         
         // Pop style and create span
@@ -375,6 +586,104 @@ class ArticleExtractor: NSObject {
         }
     }
     
+    // MARK: - Figure and Image Processing
+
+    /// Process a <figure> element, extracting image and caption
+    private static func processFigure(
+        _ element: Element,
+        plainText: inout String,
+        spans: inout [FormattingSpan],
+        images: inout [ArticleImage],
+        baseURL: URL?,
+        needsSpaceBefore: inout Bool
+    ) throws {
+        // Ensure we start on a new line
+        ensureParagraphBreak(&plainText)
+        needsSpaceBefore = false
+
+        // Find the image within the figure
+        let imgElements = try element.select("img")
+        let imgElement = imgElements.first()
+
+        // Find the caption (figcaption or any text)
+        var captionText: String? = nil
+        if let figcaption = try element.select("figcaption").first() {
+            captionText = try figcaption.text().trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        // Process the image if found
+        if let img = imgElement {
+            processImage(img, plainText: &plainText, images: &images, baseURL: baseURL, caption: captionText, needsSpaceBefore: &needsSpaceBefore)
+        }
+
+        // Add caption text with caption formatting (for display, skipped in TTS)
+        if let caption = captionText, !caption.isEmpty {
+            let captionStart = plainText.count
+            plainText.append(caption)
+            spans.append(FormattingSpan(
+                location: captionStart,
+                length: caption.count,
+                style: .caption
+            ))
+            plainText.append("\n")
+        }
+
+        ensureParagraphBreak(&plainText)
+        needsSpaceBefore = false
+    }
+
+    /// Process an <img> element
+    private static func processImage(
+        _ element: Element,
+        plainText: inout String,
+        images: inout [ArticleImage],
+        baseURL: URL?,
+        caption: String?,
+        needsSpaceBefore: inout Bool
+    ) {
+        // Get image URL - try src first, then data-src (lazy loading)
+        var imgSrc = try? element.attr("src")
+        if imgSrc == nil || imgSrc?.isEmpty == true {
+            imgSrc = try? element.attr("data-src")
+        }
+
+        guard let src = imgSrc, !src.isEmpty else { return }
+
+        // Resolve relative URLs
+        var resolvedURL = src
+        if let base = baseURL {
+            if src.hasPrefix("//") {
+                resolvedURL = "\(base.scheme ?? "https"):\(src)"
+            } else if src.hasPrefix("/") {
+                resolvedURL = "\(base.scheme ?? "https")://\(base.host ?? "")\(src)"
+            } else if !src.hasPrefix("http") {
+                resolvedURL = base.deletingLastPathComponent().appendingPathComponent(src).absoluteString
+            }
+        }
+
+        // Get alt text
+        let altText = try? element.attr("alt")
+
+        // Insert a placeholder character for the image position
+        // We use a special Unicode character that will be replaced with the image in the UI
+        let imagePosition = plainText.count
+        plainText.append("\u{FFFC}")  // Object Replacement Character (used by NSTextAttachment)
+        plainText.append("\n")
+
+        // Add the image record
+        let image = ArticleImage(
+            location: imagePosition,
+            localPath: nil,  // Will be set after downloading
+            originalURL: resolvedURL,
+            caption: caption,
+            altText: altText
+        )
+        images.append(image)
+        print("🖼️ [PARSE] Found image: \(resolvedURL) at position \(imagePosition)")
+
+        needsSpaceBefore = false
+    }
+
     /// Ensures text ends with at least one newline
     private static func ensureNewline(_ text: inout String) {
         if !text.isEmpty && !text.hasSuffix("\n") {
@@ -464,9 +773,23 @@ private class ReadabilityWebViewExtractor: NSObject, WKNavigationDelegate {
         // JavaScript to inject Readability.js and extract content
         let extractionScript = """
         \(readabilityJS)
-        
+
         (function() {
             try {
+                // Extract og:image meta tag for hero image
+                var heroImage = null;
+                var ogImage = document.querySelector('meta[property="og:image"]');
+                if (ogImage) {
+                    heroImage = ogImage.getAttribute('content');
+                }
+                // Fallback to twitter:image if no og:image
+                if (!heroImage) {
+                    var twitterImage = document.querySelector('meta[name="twitter:image"]');
+                    if (twitterImage) {
+                        heroImage = twitterImage.getAttribute('content');
+                    }
+                }
+
                 var documentClone = document.cloneNode(true);
                 var article = new Readability(documentClone).parse();
                 if (article) {
@@ -475,7 +798,8 @@ private class ReadabilityWebViewExtractor: NSObject, WKNavigationDelegate {
                         title: article.title || '',
                         author: article.byline || null,
                         content: article.content || '',
-                        excerpt: article.excerpt || null
+                        excerpt: article.excerpt || null,
+                        heroImageURL: heroImage
                     });
                 } else {
                     return JSON.stringify({success: false, error: 'Readability returned null'});
@@ -504,7 +828,8 @@ private class ReadabilityWebViewExtractor: NSObject, WKNavigationDelegate {
                 title: json["title"] as? String ?? "Untitled",
                 author: json["author"] as? String,
                 content: json["content"] as? String ?? "",
-                excerpt: json["excerpt"] as? String
+                excerpt: json["excerpt"] as? String,
+                heroImageURL: json["heroImageURL"] as? String
             )
             
             if readabilityResult.content.isEmpty {

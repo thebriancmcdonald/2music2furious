@@ -10,6 +10,27 @@ import Foundation
 import SwiftUI
 import Combine
 
+// MARK: - Image Model
+
+/// Represents an inline image in article content
+struct ArticleImage: Codable, Equatable {
+    let id: UUID
+    let location: Int           // Character position in content where image appears
+    let localPath: String?      // Path to downloaded image (relative to app's images directory)
+    let originalURL: String     // Original URL for fallback/re-download
+    let caption: String?        // Optional caption text
+    let altText: String?        // Alt text from HTML
+
+    init(id: UUID = UUID(), location: Int, localPath: String? = nil, originalURL: String, caption: String? = nil, altText: String? = nil) {
+        self.id = id
+        self.location = location
+        self.localPath = localPath
+        self.originalURL = originalURL
+        self.caption = caption
+        self.altText = altText
+    }
+}
+
 // MARK: - Formatting Models
 
 /// Style types that can be applied to text spans
@@ -62,13 +83,15 @@ struct ArticleChapter: Identifiable, Codable, Equatable {
     var title: String
     var content: String                        // Plain text for TTS (always used)
     var formattingSpans: [FormattingSpan]?     // Rich formatting overlays (optional)
+    var images: [ArticleImage]?                // Inline images with positions
     var htmlContent: String?                   // Original HTML (kept for potential re-parsing)
 
-    init(id: UUID = UUID(), title: String, content: String, formattingSpans: [FormattingSpan]? = nil, htmlContent: String? = nil) {
+    init(id: UUID = UUID(), title: String, content: String, formattingSpans: [FormattingSpan]? = nil, images: [ArticleImage]? = nil, htmlContent: String? = nil) {
         self.id = id
         self.title = title
         self.content = content
         self.formattingSpans = formattingSpans
+        self.images = images
         self.htmlContent = htmlContent
     }
 
@@ -228,19 +251,26 @@ class ArticleManager: ObservableObject {
     
     /// Background task to fetch content for "Shell" articles using ArticleExtractor
     private func hydrateArticleContent(_ article: Article) {
-        guard let url = article.sourceURL else { return }
-        
+        guard let url = article.sourceURL else {
+            print("📰 [HYDRATE] No source URL for article")
+            return
+        }
+
+        print("📰 [HYDRATE] Starting hydration for: \(url.absoluteString)")
+
         // Mark as downloading
         if let idx = articles.firstIndex(where: { $0.id == article.id }) {
             var updated = articles[idx]
             updated.isDownloading = true
             articles[idx] = updated
         }
-        
+
         Task {
             do {
+                print("📰 [HYDRATE] Extracting article content...")
                 // Use the new ArticleExtractor with Readability.js + SwiftSoup
                 let extractedArticle = try await ArticleExtractor.extract(from: url)
+                print("📰 [HYDRATE] Extracted! Images: \(extractedArticle.chapters.first?.images?.count ?? 0)")
                 
                 await MainActor.run {
                     if let idx = self.articles.firstIndex(where: { $0.id == article.id }) {

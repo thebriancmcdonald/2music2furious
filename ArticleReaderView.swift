@@ -66,6 +66,7 @@ struct ArticleReaderView: View {
                     chapterTitle: article.chapters.count > 1 ? currentChapter.title : nil,
                     content: displayContent,
                     formattingSpans: currentChapter.formattingSpans,
+                    images: currentChapter.images,
                     highlightRange: tts.currentWordRange,
                     isPlaying: tts.isPlaying,
                     lineSpacing: lineSpacing,
@@ -678,6 +679,7 @@ struct UnifiedReaderTextView: UIViewRepresentable {
     let chapterTitle: String?
     let content: String
     let formattingSpans: [FormattingSpan]?
+    let images: [ArticleImage]?
     let highlightRange: NSRange
     let isPlaying: Bool
 
@@ -696,6 +698,7 @@ struct UnifiedReaderTextView: UIViewRepresentable {
          chapterTitle: String?,
          content: String,
          formattingSpans: [FormattingSpan]? = nil,
+         images: [ArticleImage]? = nil,
          highlightRange: NSRange,
          isPlaying: Bool,
          lineSpacing: CGFloat,
@@ -709,6 +712,7 @@ struct UnifiedReaderTextView: UIViewRepresentable {
         self.chapterTitle = chapterTitle
         self.content = content
         self.formattingSpans = formattingSpans
+        self.images = images
         self.highlightRange = highlightRange
         self.isPlaying = isPlaying
         self.lineSpacing = lineSpacing
@@ -823,6 +827,66 @@ struct UnifiedReaderTextView: UIViewRepresentable {
                     bodyText.addAttribute(.foregroundColor, value: UIColor.tertiaryLabel, range: nsRange)
                 }
             }
+        }
+
+        // Insert images at their placeholder positions (reverse order to preserve indices)
+        if let articleImages = images {
+            print("🖼️ [DISPLAY] Have \(articleImages.count) images to display")
+            // Sort by location descending so we can insert without affecting earlier positions
+            let sortedImages = articleImages.sorted { $0.location > $1.location }
+
+            for articleImage in sortedImages {
+                // Find the placeholder character position
+                let placeholderLocation = articleImage.location
+                print("🖼️ [DISPLAY] Image at location \(placeholderLocation), localPath: \(articleImage.localPath ?? "nil")")
+                guard placeholderLocation >= 0, placeholderLocation < bodyText.length else {
+                    print("🖼️ [DISPLAY] ❌ Location out of bounds (bodyText.length: \(bodyText.length))")
+                    continue
+                }
+
+                // Load the image
+                if let uiImage = ArticleExtractor.loadImage(for: articleImage) {
+                    print("🖼️ [DISPLAY] ✅ Loaded image: \(uiImage.size)")
+                    // Calculate width to fit screen width minus padding (16pt each side + textContainer insets)
+                    let screenWidth = UIScreen.main.bounds.width
+                    let horizontalPadding: CGFloat = 40  // 16pt padding + textContainerInset
+                    let maxWidth = screenWidth - horizontalPadding
+
+                    // Scale image to fit width while maintaining aspect ratio
+                    let aspectRatio = uiImage.size.height / uiImage.size.width
+                    let displayWidth = maxWidth
+                    // Cap height to avoid absurdly tall images
+                    let displayHeight = min(displayWidth * aspectRatio, 500)
+
+                    print("🖼️ [DISPLAY] Rendering at size: \(displayWidth) x \(displayHeight)")
+
+                    // Create scaled image
+                    let scaledSize = CGSize(width: displayWidth, height: displayHeight)
+                    let renderer = UIGraphicsImageRenderer(size: scaledSize)
+                    let scaledImage = renderer.image { ctx in
+                        uiImage.draw(in: CGRect(origin: .zero, size: scaledSize))
+                    }
+
+                    // Create text attachment with the image
+                    let attachment = NSTextAttachment()
+                    attachment.image = scaledImage
+
+                    // Create attributed string with attachment
+                    let imageString = NSMutableAttributedString(attachment: attachment)
+
+                    // Add a newline after the image for spacing
+                    imageString.append(NSAttributedString(string: "\n"))
+
+                    // Replace the placeholder character with the image
+                    let placeholderRange = NSRange(location: placeholderLocation, length: 1)
+                    bodyText.replaceCharacters(in: placeholderRange, with: imageString)
+                    print("🖼️ [DISPLAY] ✅ Replaced placeholder at \(placeholderLocation), bodyText length now: \(bodyText.length)")
+                } else {
+                    print("🖼️ [DISPLAY] ❌ Failed to load image from: \(articleImage.localPath ?? "nil")")
+                }
+            }
+        } else {
+            print("🖼️ [DISPLAY] No images array passed to view")
         }
 
         combined.append(bodyText)
